@@ -1,0 +1,31 @@
+import 'package:flutter/material.dart';
+import '../brand_config.dart';
+
+const stockvalaBrand = BrandConfig(
+  brandId: 'stockvala',
+  appName: 'StockVala',
+  tagline: 'Trade. Invest. Grow.',
+  bundleIdAndroid: 'com.stockvala.app',
+  bundleIdIOS: 'com.stockvala.app',
+  apiBaseUrl: 'http://api.onefx.co.in/api',
+  wsUrl: 'ws://api.onefx.co.in/ws',
+  mt5ApiUrl: 'http://api.onefx.co.in/api',
+  webAppUrl: 'https://app.stockvala.com',
+  primaryColor: Color(0xFF6B21D9),
+  primaryLightColor: Color(0xFF8B5CF6),
+  primaryLighterColor: Color(0xFFEDE9FE),
+  accentColor: Color(0xFF7C3AED),
+  supportEmail: 'support@stockvala.com',
+  supportUrl: 'https://support.stockvala.com',
+  companyName: 'StockVala Technologies Ltd.',
+  regulatorLabel: 'Regulated by SEBI',
+  termsUrl: 'https://stockvala.com/terms',
+  privacyUrl: 'https://stockvala.com/privacy',
+  showCopyTrading: true,
+  showMamPamm: true,
+  showCrypto: true,
+  showIndices: true,
+  showEnergy: true,
+  minDeposit: 100.0,
+  minWithdraw: 10.0,
+);

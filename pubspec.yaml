@@ -1,0 +1,90 @@
+name: stockvala
+description: AI-Native Trading & Investment Platform
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  google_fonts: ^6.2.1
+
+  # State Management
+  flutter_bloc: ^8.1.5
+  equatable: ^2.0.5
+  provider: ^6.1.2
+
+  # Navigation
+  go_router: ^14.2.7
+
+  # Network
+  dio: ^5.4.3
+  web_socket_channel: ^3.0.1
+  socket_io_client: ^3.0.2
+  connectivity_plus: ^6.0.3
+
+  # Storage
+  flutter_secure_storage: ^9.2.2
+  shared_preferences: ^2.3.2
+  hive_flutter: ^1.1.0
+
+  # Auth & Security
+  local_auth: ^2.3.0
+  pin_code_fields: ^8.0.1
+  crypto: ^3.0.3
+
+  # UI & Charts
+  fl_chart: ^0.69.0
+  candlesticks: ^2.1.0
+  shimmer: ^3.0.0
+  lottie: ^3.1.2
+  cached_network_image: ^3.3.1
+  flutter_svg: ^2.0.10+1
+  glassmorphism: ^3.0.0
+  percent_indicator: ^4.2.3
+  animated_text_kit: ^4.2.2
+  flutter_animate: ^4.5.0
+  country_picker: ^2.0.26
+  intl_phone_field: ^3.2.0
+
+  # Camera / KYC
+  camera: ^0.11.0+2
+  image_picker: ^1.1.2
+
+  # Notifications
+  firebase_messaging: ^15.1.3
+  flutter_local_notifications: ^17.2.2
+  firebase_core: ^3.6.0
+
+  # Utilities
+  intl: ^0.19.0
+  uuid: ^4.4.2
+  url_launcher: ^6.3.0
+  package_info_plus: ^8.0.2
+  device_info_plus: ^10.1.2
+  permission_handler: ^11.3.1
+  image_cropper: ^8.0.2
+  pdf: ^3.11.1
+  path_provider: ^2.1.4
+  open_file: ^3.5.8
+  qr_flutter: ^4.1.0
+
+  # Charts & Indicators
+  syncfusion_flutter_charts: ^27.1.48
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  build_runner: ^2.4.11
+  hive_generator: ^2.0.1
+  json_serializable: ^6.8.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
+    - assets/icons/

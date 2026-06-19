@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Allow cleartext (HTTP) for the OneFX API server -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">api.onefx.co.in</domain>
+        <domain includeSubdomains="true">mt5.onefx.co.in</domain>
+        <domain includeSubdomains="true">195.250.31.123</domain>
+    </domain-config>
+    <!-- Everything else uses HTTPS only -->
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

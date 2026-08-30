@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:image_picker/image_picker.dart';
+import '../../../core/network/api_exception.dart';
+import '../../finance/repository/finance_repository.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_text_styles.dart';
 import '../../../core/constants/app_routes.dart';
@@ -167,8 +170,63 @@ class KycDocumentScreen extends StatefulWidget {
 
 class _KycDocumentScreenState extends State<KycDocumentScreen> {
   String? _selectedDoc;
-  bool _frontUploaded = false;
-  bool _backUploaded = false;
+  XFile? _front;
+  XFile? _back;
+  bool _submitting = false;
+
+  bool get _frontUploaded => _front != null;
+  bool get _backUploaded => _back != null;
+
+  Future<XFile?> _pickImage() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        ListTile(
+          leading: const Icon(Icons.camera_alt_outlined, color: AppColors.primary),
+          title: const Text('Take Photo'),
+          onTap: () => Navigator.pop(ctx, ImageSource.camera),
+        ),
+        ListTile(
+          leading: const Icon(Icons.photo_library_outlined, color: AppColors.primary),
+          title: const Text('Choose from Gallery'),
+          onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+        ),
+      ])),
+    );
+    if (source == null) return null;
+    try {
+      return await ImagePicker().pickImage(source: source, maxWidth: 1600, imageQuality: 85);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Could not open picker'), backgroundColor: AppColors.error));
+      }
+      return null;
+    }
+  }
+
+  Future<void> _submit() async {
+    if (_front == null || _back == null || _submitting) return;
+    setState(() => _submitting = true);
+    try {
+      await FinanceRepository.instance.uploadKycDocuments(
+        frontPath: _front!.path,
+        backPath: _back!.path,
+        documentType: _selectedDoc,
+      );
+      if (!mounted) return;
+      Navigator.pushNamed(context, AppRoutes.kycSelfie);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(e is ApiException ? e.message : 'Upload failed — try again'),
+          backgroundColor: AppColors.error));
+      }
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
 
   final List<Map<String, dynamic>> _docTypes = [
     {'type': 'Passport', 'icon': Icons.book_outlined},
@@ -232,10 +290,16 @@ class _KycDocumentScreenState extends State<KycDocumentScreen> {
               Row(
                 children: [
                   Expanded(child: _UploadBox(label: 'Front Side', uploaded: _frontUploaded,
-                      onTap: () => setState(() => _frontUploaded = true))),
+                      onTap: () async {
+                        final f = await _pickImage();
+                        if (f != null) setState(() => _front = f);
+                      })),
                   const SizedBox(width: 12),
                   Expanded(child: _UploadBox(label: 'Back Side', uploaded: _backUploaded,
-                      onTap: () => setState(() => _backUploaded = true))),
+                      onTap: () async {
+                        final f = await _pickImage();
+                        if (f != null) setState(() => _back = f);
+                      })),
                 ],
               ),
               const SizedBox(height: 16),
@@ -252,11 +316,10 @@ class _KycDocumentScreenState extends State<KycDocumentScreen> {
               ),
               const SizedBox(height: 32),
               AppButton(
-                label: 'Continue',
-                suffixIcon: Icons.arrow_forward_rounded,
-                onPressed: _frontUploaded && _backUploaded
-                    ? () => Navigator.pushNamed(context, AppRoutes.kycSelfie)
-                    : null,
+                label: _submitting ? 'Uploading…' : 'Continue',
+                suffixIcon: _submitting ? null : Icons.arrow_forward_rounded,
+                isLoading: _submitting,
+                onPressed: _frontUploaded && _backUploaded && !_submitting ? _submit : null,
               ),
             ],
           ],
@@ -274,7 +337,41 @@ class KycSelfieScreen extends StatefulWidget {
 }
 
 class _KycSelfieScreenState extends State<KycSelfieScreen> {
-  bool _selfieCaptered = false;
+  XFile? _selfie;
+  bool _submitting = false;
+
+  bool get _selfieCaptered => _selfie != null;
+
+  Future<void> _capture() async {
+    XFile? f;
+    try {
+      // Front camera for a selfie; simulator has no camera → fall back to gallery.
+      f = await ImagePicker().pickImage(
+          source: ImageSource.camera, preferredCameraDevice: CameraDevice.front,
+          maxWidth: 1600, imageQuality: 85);
+    } catch (_) {
+      f = await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 1600, imageQuality: 85);
+    }
+    if (f != null && mounted) setState(() => _selfie = f);
+  }
+
+  Future<void> _submit() async {
+    if (_selfie == null || _submitting) return;
+    setState(() => _submitting = true);
+    try {
+      await FinanceRepository.instance.uploadKycDocuments(selfiePath: _selfie!.path);
+      if (!mounted) return;
+      Navigator.pushNamed(context, AppRoutes.kycRiskProfile);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(e is ApiException ? e.message : 'Upload failed — try again'),
+          backgroundColor: AppColors.error));
+      }
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -294,7 +391,7 @@ class _KycSelfieScreenState extends State<KycSelfieScreen> {
 
             // Camera frame
             GestureDetector(
-              onTap: () => setState(() => _selfieCaptered = true),
+              onTap: _capture,
               child: Container(
                 width: 200, height: 200,
                 decoration: BoxDecoration(
@@ -332,12 +429,11 @@ class _KycSelfieScreenState extends State<KycSelfieScreen> {
             const Spacer(),
 
             AppButton(
-              label: _selfieCaptered ? 'Continue' : 'Take Selfie',
-              prefixIcon: _selfieCaptered ? null : Icons.camera_alt_outlined,
-              suffixIcon: _selfieCaptered ? Icons.arrow_forward_rounded : null,
-              onPressed: _selfieCaptered
-                  ? () => Navigator.pushNamed(context, AppRoutes.kycRiskProfile)
-                  : () => setState(() => _selfieCaptered = true),
+              label: _submitting ? 'Uploading…' : (_selfieCaptered ? 'Continue' : 'Take Selfie'),
+              prefixIcon: _selfieCaptered || _submitting ? null : Icons.camera_alt_outlined,
+              suffixIcon: _selfieCaptered && !_submitting ? Icons.arrow_forward_rounded : null,
+              isLoading: _submitting,
+              onPressed: _submitting ? null : (_selfieCaptered ? _submit : _capture),
             ),
           ],
         ),

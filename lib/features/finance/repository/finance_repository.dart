@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:dio/dio.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/network/api_exception.dart';
 
@@ -268,6 +269,29 @@ class FinanceRepository {
   }
 
   // ── KYC status ────────────────────────────────────────────────────────────────
+  // POST /kyc/upload — multipart: idProofFront, idProofBack, selfie (+documentType)
+  // Any subset of files may be sent; the backend updates only what it receives.
+  Future<void> uploadKycDocuments({
+    String? frontPath,
+    String? backPath,
+    String? selfiePath,
+    String? documentType,
+    String? documentNumber,
+  }) async {
+    try {
+      final form = FormData.fromMap({
+        if (documentType != null) 'documentType': documentType,
+        if (documentNumber != null && documentNumber.isNotEmpty) 'documentNumber': documentNumber,
+        if (frontPath != null) 'idProofFront': await MultipartFile.fromFile(frontPath),
+        if (backPath != null) 'idProofBack': await MultipartFile.fromFile(backPath),
+        if (selfiePath != null) 'selfie': await MultipartFile.fromFile(selfiePath),
+      });
+      await _api.dio.post('/kyc/upload', data: form);
+    } catch (e) {
+      throw extractApiException(e);
+    }
+  }
+
   // GET /kyc/status → { status: "not-submitted" | "pending" | "verified" | "rejected" }
   Future<KycStatus> getKycStatus() async {
     try {

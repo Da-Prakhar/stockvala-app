@@ -39,6 +39,18 @@ class QuoteTick {
 
   String get formattedBid => bid.toStringAsFixed(_decimals(sym));
   String get formattedAsk => ask.toStringAsFixed(_decimals(sym));
+  String get formattedHigh => (high > 0 ? high : bid).toStringAsFixed(_decimals(sym));
+  String get formattedLow => (low > 0 ? low : bid).toStringAsFixed(_decimals(sym));
+
+  /// Spread in points (units of the last displayed digit), MT5-style:
+  /// EURUSD 1.15821/1.15824 → 3.0, XAUUSD 4456.34/4456.36 → 2.0.
+  String get formattedSpread {
+    var scale = 1.0;
+    for (var i = 0; i < _decimals(sym); i++) {
+      scale *= 10;
+    }
+    return (spread * scale).toStringAsFixed(1);
+  }
   String get formattedChange => '${isBullish ? '+' : ''}${changePct.toStringAsFixed(2)}%';
   String get formattedPips => '${isBullish ? '+' : ''}${change.abs().toStringAsFixed(_decimals(sym) > 3 ? 1 : 0)} pts';
 

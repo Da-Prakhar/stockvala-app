@@ -22,7 +22,8 @@ class MainShell extends StatefulWidget {
 }
 
 class _MainShellState extends State<MainShell> {
-  int _idx = 0;
+  // Debug convenience: --dart-define=DEV_TAB=2 opens straight on Trade.
+  int _idx = const int.fromEnvironment('DEV_TAB', defaultValue: 0);
 
   void switchTab(int index) => setState(() => _idx = index);
 

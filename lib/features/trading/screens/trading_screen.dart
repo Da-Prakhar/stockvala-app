@@ -244,11 +244,11 @@ class _PriceHeader extends StatelessWidget {
       ]),
       const Spacer(),
       if (tick != null) ...[
-        _PStat('Spread', tick!.spread.toStringAsFixed(1)),
+        _PStat('Spread', tick!.formattedSpread),
         const SizedBox(width: 16),
-        _PStat('High', tick!.formattedBid),
+        _PStat('High', tick!.formattedHigh),
         const SizedBox(width: 16),
-        _PStat('Low', tick!.formattedAsk),
+        _PStat('Low', tick!.formattedLow),
       ],
     ]),
   );

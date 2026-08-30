@@ -195,10 +195,20 @@ class FinanceRepository {
 
   // ── Submit withdrawal ─────────────────────────────────────────────────────────
   // POST /funds/withdrawals  { mt5AccountId: int, amount: number, paymentMethodId: int }
+  // POST /funds/withdrawals/send-otp — emails a withdrawal OTP to the user
+  Future<void> requestWithdrawalOtp() async {
+    try {
+      await _api.post('/funds/withdrawals/send-otp');
+    } catch (e) {
+      throw extractApiException(e);
+    }
+  }
+
   Future<FinanceTransaction> withdraw({
     required String accountId,
     required double amount,
     required int paymentMethodId,
+    String? otp,
   }) async {
     final aid = int.tryParse(accountId);
     if (aid == null) {
@@ -212,6 +222,7 @@ class FinanceRepository {
         'mt5AccountId': aid,
         'amount': amount,
         'paymentMethodId': paymentMethodId,
+        if (otp != null && otp.isNotEmpty) 'otp': otp,
       });
       final body = res.data as Map<String, dynamic>;
       final d = (body['data'] is Map) ? body['data'] as Map<String, dynamic> : body;

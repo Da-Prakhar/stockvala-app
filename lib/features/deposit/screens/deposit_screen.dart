@@ -576,13 +576,31 @@ class _DepositScreenState extends State<DepositScreen> {
     setState(() { _submitting = true; _errorMsg = null; });
 
     try {
-      final FinanceTransaction tx;
+      FinanceTransaction tx;
       if (isW) {
-        tx = await FinanceRepository.instance.withdraw(
-          accountId: acc.id,
-          amount: amount,
-          paymentMethodId: method.id,
-        );
+        try {
+          tx = await FinanceRepository.instance.withdraw(
+            accountId: acc.id,
+            amount: amount,
+            paymentMethodId: method.id,
+          );
+        } on ApiException catch (e) {
+          // Broker requires an email OTP for withdrawals — fetch one and ask.
+          if (!e.message.toLowerCase().contains('otp is required')) rethrow;
+          await FinanceRepository.instance.requestWithdrawalOtp();
+          if (!mounted) return;
+          final code = await _promptWithdrawalOtp();
+          if (code == null || code.isEmpty) {
+            setState(() { _submitting = false; _errorMsg = 'Withdrawal cancelled — OTP not entered'; });
+            return;
+          }
+          tx = await FinanceRepository.instance.withdraw(
+            accountId: acc.id,
+            amount: amount,
+            paymentMethodId: method.id,
+            otp: code,
+          );
+        }
       } else {
         tx = await FinanceRepository.instance.deposit(
           accountId: acc.id,
@@ -622,6 +640,42 @@ class _DepositScreenState extends State<DepositScreen> {
       final msg = e is ApiException ? e.userMessage : e.toString();
       setState(() { _submitting = false; _errorMsg = msg; });
     }
+  }
+
+  /// Modal asking for the withdrawal OTP that was just emailed.
+  Future<String?> _promptWithdrawalOtp() {
+    final ctrl = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.bg100,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Withdrawal Verification',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text('We emailed you a one-time code. Enter it to confirm this withdrawal.',
+              style: TextStyle(fontSize: 13)),
+          const SizedBox(height: 14),
+          TextField(
+            controller: ctrl,
+            autofocus: true,
+            keyboardType: TextInputType.number,
+            maxLength: 6,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, letterSpacing: 8),
+            decoration: const InputDecoration(counterText: '', hintText: '••••••'),
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+            child: const Text('Confirm', style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────────

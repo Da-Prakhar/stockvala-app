@@ -5,6 +5,8 @@ import '../../../core/providers/mt5_account_store.dart';
 import '../../../shared/widgets/vantage.dart';
 import '../../deposit/screens/deposit_screen.dart';
 import '../../finance/repository/finance_repository.dart';
+import '../../trading/models/trading_models.dart';
+import '../../trading/repository/trading_repository.dart';
 
 /// V2 Funds tab — Vantage "Funds" layout over our MT5 accounts + fund history.
 class FundsScreen extends StatefulWidget {
@@ -14,10 +16,22 @@ class FundsScreen extends StatefulWidget {
 }
 
 class _FundsScreenState extends State<FundsScreen> with AutomaticKeepAliveClientMixin {
-  int _seg = 0; // 0 Overview · 1 CFDs · 2 History
+  int _seg = 0; // 0 Overview · 1 Trade History · 2 Funding
   bool _hidden = false;
   List<FinanceTransaction> _txs = [];
   bool _txLoading = false;
+
+  // ── Trade history + period P/L ──────────────────────────────────────────
+  List<TradeHistory> _trades = [];
+  bool _tradesLoading = false;
+  int _period = 1; // index into _periods
+  static const _periods = [
+    ('1D', Duration(days: 1)),
+    ('7D', Duration(days: 7)),
+    ('1M', Duration(days: 30)),
+    ('3M', Duration(days: 90)),
+    ('All', Duration(days: 36500)),
+  ];
 
   @override
   bool get wantKeepAlive => true;
@@ -26,6 +40,24 @@ class _FundsScreenState extends State<FundsScreen> with AutomaticKeepAliveClient
   void initState() {
     super.initState();
     _loadTxs();
+  }
+
+  Future<void> _loadTrades() async {
+    final acc = Mt5AccountStore.instance.active;
+    if (acc == null) return;
+    setState(() => _tradesLoading = _trades.isEmpty);
+    try {
+      final h = await TradingRepository.instance
+          .getHistory(accountId: acc.id, limit: 200);
+      if (mounted) setState(() { _trades = h; _tradesLoading = false; });
+    } catch (_) {
+      if (mounted) setState(() => _tradesLoading = false);
+    }
+  }
+
+  List<TradeHistory> get _periodTrades {
+    final cutoff = DateTime.now().subtract(_periods[_period].$2);
+    return _trades.where((t) => t.closeTime.isAfter(cutoff)).toList();
   }
 
   Future<void> _loadTxs() async {
@@ -67,10 +99,14 @@ class _FundsScreenState extends State<FundsScreen> with AutomaticKeepAliveClient
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
               child: VTextTabs(
-                tabs: const ['Overview', 'CFDs', 'History'],
+                tabs: const ['Overview', 'Trade History', 'Funding'],
                 selected: _seg,
                 big: true,
-                onTap: (i) => setState(() => _seg = i),
+                fontSize: 19,
+                onTap: (i) {
+                  setState(() => _seg = i);
+                  if (i == 1) _loadTrades();
+                },
               ),
             ),
             const SizedBox(height: 18),
@@ -142,7 +178,77 @@ class _FundsScreenState extends State<FundsScreen> with AutomaticKeepAliveClient
             ),
             const SizedBox(height: 24),
 
-            if (_seg == 2) ...[
+            if (_seg == 1) ...[
+              // ── Period chips ───────────────────────────────────────────
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: VChipTabs(
+                  tabs: _periods.map((p) => p.$1).toList(),
+                  selected: _period,
+                  onTap: (i) => setState(() => _period = i),
+                ),
+              ),
+              const SizedBox(height: 14),
+              // ── P/L summary card ───────────────────────────────────────
+              Builder(builder: (context) {
+                final rows = _periodTrades;
+                final net = rows.fold<double>(
+                    0, (s, t) => s + t.profit + t.swap + t.commission);
+                final wins = rows.where((t) => t.profit > 0).length;
+                final nc = net >= 0 ? AppColors.bullish : AppColors.bearish;
+                return Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: VCard(
+                    child: Row(children: [
+                      Expanded(
+                        child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('${_periods[_period].$1} Net P/L',
+                                  style: const TextStyle(fontSize: 13,
+                                      color: AppColors.textMuted)),
+                              const SizedBox(height: 4),
+                              Text(
+                                  _hidden
+                                      ? '••••'
+                                      : '${net >= 0 ? '+' : ''}${net.toStringAsFixed(2)} USD',
+                                  style: TextStyle(fontSize: 24,
+                                      fontWeight: FontWeight.w800, color: nc)),
+                            ]),
+                      ),
+                      Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                        Text('${rows.length} trades',
+                            style: const TextStyle(fontSize: 13.5,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.textPrimary)),
+                        const SizedBox(height: 3),
+                        Text(
+                            rows.isEmpty
+                                ? '—'
+                                : '${(wins * 100 / rows.length).toStringAsFixed(0)}% win rate',
+                            style: const TextStyle(fontSize: 12.5,
+                                color: AppColors.textMuted)),
+                      ]),
+                    ]),
+                  ),
+                );
+              }),
+              const SizedBox(height: 14),
+              if (_tradesLoading)
+                const Padding(
+                  padding: EdgeInsets.all(40),
+                  child: Center(child: CircularProgressIndicator(
+                      strokeWidth: 2.5, color: AppColors.primary)),
+                )
+              else if (_periodTrades.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(40),
+                  child: Center(child: Text('No closed trades in this period',
+                      style: TextStyle(fontSize: 14, color: AppColors.textMuted))),
+                )
+              else
+                ..._periodTrades.map((t) => _TradeRow(trade: t, hidden: _hidden)),
+            ] else if (_seg == 2) ...[
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 16),
                 child: VSectionHeader('Transactions'),
@@ -242,6 +348,57 @@ class _FundsScreenState extends State<FundsScreen> with AutomaticKeepAliveClient
             ],
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _TradeRow extends StatelessWidget {
+  final TradeHistory trade;
+  final bool hidden;
+  const _TradeRow({required this.trade, required this.hidden});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = trade;
+    final isBuy = t.side == OrderSide.buy;
+    final pc = t.profit >= 0 ? AppColors.bullish : AppColors.bearish;
+    final d = t.closeTime;
+    String two(int v) => v.toString().padLeft(2, '0');
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
+      child: VCard(
+        padding: const EdgeInsets.all(13),
+        child: Row(children: [
+          SymbolAvatar(t.symbol, size: 36),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Text(t.symbol,
+                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800,
+                        color: AppColors.textPrimary)),
+                const SizedBox(width: 7),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: isBuy ? AppColors.bullishBg : AppColors.bearishBg,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text('${isBuy ? 'Buy' : 'Sell'} ${t.lots.toStringAsFixed(2)}',
+                      style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700,
+                          color: isBuy ? AppColors.bullish : AppColors.bearish)),
+                ),
+              ]),
+              const SizedBox(height: 3),
+              Text(
+                  '${t.openPrice} → ${t.closePrice} · ${d.year}-${two(d.month)}-${two(d.day)} ${two(d.hour)}:${two(d.minute)}',
+                  style: const TextStyle(fontSize: 11.5, color: AppColors.textMuted)),
+            ]),
+          ),
+          Text(hidden ? '••••' : '${t.profit >= 0 ? '+' : ''}${t.profit.toStringAsFixed(2)}',
+              style: TextStyle(fontSize: 15.5, fontWeight: FontWeight.w800, color: pc)),
+        ]),
       ),
     );
   }

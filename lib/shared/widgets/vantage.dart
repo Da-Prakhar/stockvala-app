@@ -284,7 +284,10 @@ class SymbolRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final up = changePct >= 0;
+    // Flat day-change (weekend) → color by the sparkline trend instead.
+    final up = changePct != 0
+        ? changePct > 0
+        : (spark.length > 1 ? spark.last >= spark.first : true);
     final cc = up ? AppColors.bullish : AppColors.bearish;
     return InkWell(
       onTap: onTap,

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
@@ -292,6 +293,120 @@ class _TradingScreenState extends State<TradingScreen>
     } finally {
       if (mounted) setState(() => _placing = false);
     }
+  }
+
+  void _showTradeDetails(BuildContext context,
+      {TradeHistory? closed, TradingPosition? open}) {
+    final isClosed = closed != null;
+    final symbol = isClosed ? closed.symbol : open!.symbol;
+    final isBuy = (isClosed ? closed.side : open!.side) == OrderSide.buy;
+    final lots = isClosed ? closed.lots : open!.lots;
+    final profit = isClosed ? closed.profit : open!.profit;
+    final pc = profit >= 0 ? AppColors.bullish : AppColors.bearish;
+    String fmtT(DateTime t) {
+      String two(int v) => v.toString().padLeft(2, '0');
+      return '${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}:${two(t.second)}';
+    }
+
+    String dur(Duration d) {
+      if (d.inDays > 0) return '${d.inDays}d ${d.inHours % 24}h';
+      if (d.inHours > 0) return '${d.inHours}h ${d.inMinutes % 60}m';
+      if (d.inMinutes > 0) return '${d.inMinutes}m ${d.inSeconds % 60}s';
+      return '${d.inSeconds}s';
+    }
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 18, 24, 10),
+          child: Column(mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              SymbolAvatar(symbol, size: 40),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(children: [
+                        Text(symbol,
+                            style: const TextStyle(fontSize: 19,
+                                fontWeight: FontWeight.w800,
+                                color: AppColors.textPrimary)),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: isBuy
+                                ? AppColors.bullishBg : AppColors.bearishBg,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                              '${isBuy ? 'Buy' : 'Sell'} ${lots.toStringAsFixed(2)}',
+                              style: TextStyle(fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: isBuy
+                                      ? AppColors.bullish : AppColors.bearish)),
+                        ),
+                      ]),
+                      Text(isClosed ? 'Closed' : 'Open',
+                          style: const TextStyle(fontSize: 12.5,
+                              color: AppColors.textMuted)),
+                    ]),
+              ),
+              Text('${profit >= 0 ? '+' : ''}${profit.toStringAsFixed(2)}',
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800,
+                      color: pc)),
+            ]),
+            const SizedBox(height: 16),
+            const Divider(height: 1, color: AppColors.borderLight),
+            const SizedBox(height: 8),
+            VInfoRow('Ticket', '#${isClosed ? closed.ticket : open!.ticket}'),
+            VInfoRow('Open Price',
+                (isClosed ? closed.openPrice : open!.openPrice).toString()),
+            VInfoRow(isClosed ? 'Close Price' : 'Current Price',
+                (isClosed ? closed.closePrice : open!.currentPrice).toString()),
+            if (!isClosed && open!.stopLoss > 0)
+              VInfoRow('Stop Loss', open.stopLoss.toString(),
+                  valueColor: AppColors.bearish),
+            if (!isClosed && open!.takeProfit > 0)
+              VInfoRow('Take Profit', open.takeProfit.toString(),
+                  valueColor: AppColors.bullish),
+            VInfoRow('Swap',
+                (isClosed ? closed.swap : open!.swap).toStringAsFixed(2)),
+            if (isClosed)
+              VInfoRow('Commission', closed.commission.toStringAsFixed(2)),
+            if (isClosed)
+              VInfoRow('Net P/L',
+                  (closed.profit + closed.swap + closed.commission)
+                      .toStringAsFixed(2),
+                  valueColor: pc),
+            VInfoRow('Open Time',
+                fmtT(isClosed ? closed.openTime : open!.openTime)),
+            if (isClosed) VInfoRow('Close Time', fmtT(closed.closeTime)),
+            if (isClosed)
+              VInfoRow('Duration',
+                  dur(closed.closeTime.difference(closed.openTime))),
+            const SizedBox(height: 14),
+            if (!isClosed)
+              VPill(
+                label: 'Close Position',
+                dark: true,
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _closePosition(open!);
+                },
+              ),
+            const SizedBox(height: 6),
+          ]),
+        ),
+      ),
+    );
   }
 
   Future<void> _closePosition(TradingPosition p) async {
@@ -787,8 +902,13 @@ class _TradingScreenState extends State<TradingScreen>
                                   style: TextStyle(fontSize: 14,
                                       color: AppColors.textMuted))),
                         )
-                      else
-                        ..._history.map((h) => _HistoryRow(trade: h)),
+                      else ...[
+                        _PnlSummaryCard(history: _history),
+                        ..._history.map((h) => _HistoryRow(
+                              trade: h,
+                              onTap: () => _showTradeDetails(context, closed: h),
+                            )),
+                      ],
                     ] else if (_bottomTab == 1 || _positions.isEmpty)
                       const Padding(
                         padding: EdgeInsets.all(28),
@@ -801,6 +921,7 @@ class _TradingScreenState extends State<TradingScreen>
                       ..._positions.map((p) => _PositionRow(
                             position: p,
                             onClose: () => _closePosition(p),
+                            onTap: () => _showTradeDetails(context, open: p),
                           )),
                   ],
                 ),
@@ -844,9 +965,115 @@ class _SideButton extends StatelessWidget {
       );
 }
 
+/// Cumulative P/L curve over the loaded closed trades.
+class _PnlSummaryCard extends StatelessWidget {
+  final List<TradeHistory> history;
+  const _PnlSummaryCard({required this.history});
+
+  @override
+  Widget build(BuildContext context) {
+    final trades = List<TradeHistory>.from(history)
+      ..sort((a, b) => a.closeTime.compareTo(b.closeTime));
+    var cum = 0.0;
+    final points = <double>[0];
+    var wins = 0;
+    for (final t in trades) {
+      final net = t.profit + t.swap + t.commission;
+      cum += net;
+      points.add(cum);
+      if (net >= 0) wins++;
+    }
+    final total = cum;
+    final pc = total >= 0 ? AppColors.bullish : AppColors.bearish;
+    final winRate = trades.isEmpty ? 0 : (wins * 100 / trades.length).round();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      child: VCard(
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Net P/L',
+                        style: TextStyle(fontSize: 12.5, color: AppColors.textMuted)),
+                    const SizedBox(height: 2),
+                    Text('${total >= 0 ? '+' : ''}${total.toStringAsFixed(2)} USD',
+                        style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800,
+                            color: pc)),
+                  ]),
+            ),
+            Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+              Text('${trades.length} trades',
+                  style: const TextStyle(fontSize: 12.5,
+                      color: AppColors.textSecondary)),
+              const SizedBox(height: 2),
+              Text('$winRate% win rate',
+                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary)),
+            ]),
+          ]),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 96,
+            width: double.infinity,
+            child: points.length < 2
+                ? const SizedBox()
+                : CustomPaint(painter: _PnlCurvePainter(points, pc)),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+class _PnlCurvePainter extends CustomPainter {
+  final List<double> pts;
+  final Color color;
+  _PnlCurvePainter(this.pts, this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final lo = math.min(0.0, pts.reduce(math.min));
+    final hi = math.max(0.0, pts.reduce(math.max));
+    final range = (hi - lo) == 0 ? 1.0 : hi - lo;
+    double x(int i) => size.width * i / (pts.length - 1);
+    double y(double v) => (1 - (v - lo) / range) * (size.height - 6) + 3;
+
+    // zero baseline
+    canvas.drawLine(Offset(0, y(0)), Offset(size.width, y(0)),
+        Paint()..color = AppColors.border..strokeWidth = 1);
+
+    final line = Path()..moveTo(x(0), y(pts[0]));
+    for (var i = 1; i < pts.length; i++) {
+      line.lineTo(x(i), y(pts[i]));
+    }
+    // soft fill to the baseline
+    final fill = Path.from(line)
+      ..lineTo(size.width, y(0))
+      ..lineTo(0, y(0))
+      ..close();
+    canvas.drawPath(fill, Paint()..color = color.withValues(alpha: .10));
+    canvas.drawPath(line, Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round);
+    // end dot
+    canvas.drawCircle(Offset(x(pts.length - 1), y(pts.last)), 3.5,
+        Paint()..color = color);
+  }
+
+  @override
+  bool shouldRepaint(_PnlCurvePainter old) => old.pts != pts;
+}
+
 class _HistoryRow extends StatelessWidget {
   final TradeHistory trade;
-  const _HistoryRow({required this.trade});
+  final VoidCallback? onTap;
+  const _HistoryRow({required this.trade, this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -858,6 +1085,7 @@ class _HistoryRow extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
       child: VCard(
+        onTap: onTap,
         padding: const EdgeInsets.all(14),
         child: Row(children: [
           Expanded(
@@ -908,7 +1136,8 @@ class _HistoryRow extends StatelessWidget {
 class _PositionRow extends StatelessWidget {
   final TradingPosition position;
   final VoidCallback onClose;
-  const _PositionRow({required this.position, required this.onClose});
+  final VoidCallback? onTap;
+  const _PositionRow({required this.position, required this.onClose, this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -918,6 +1147,7 @@ class _PositionRow extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
       child: VCard(
+        onTap: onTap,
         padding: const EdgeInsets.all(14),
         child: Row(children: [
           Expanded(

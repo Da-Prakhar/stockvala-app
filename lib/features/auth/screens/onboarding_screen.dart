@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../core/constants/app_routes.dart';
 import '../../../core/theme/app_colors.dart';
-import '../../../config/app_config.dart';
 
 /// V2 onboarding — black stage, segmented progress, bold headline,
 /// emoji hero art, orange Get Started pill.
@@ -101,9 +100,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             ),
             const Spacer(),
             Center(
-              child: Text(AppConfig.appName.toUpperCase(),
-                  style: const TextStyle(fontSize: 13, letterSpacing: 5,
-                      fontWeight: FontWeight.w700, color: Color(0xFF6E6E73))),
+              child: Image.asset('assets/images/logo_dark.png', height: 44),
             ),
             const SizedBox(height: 26),
             SizedBox(

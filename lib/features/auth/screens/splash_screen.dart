@@ -87,16 +87,10 @@ class _SplashScreenState extends State<SplashScreen> {
                       ),
                       child: const Icon(Icons.candlestick_chart_rounded, color: Colors.white, size: 46),
                     ).animate().scale(duration: 700.ms, curve: Curves.elasticOut).fadeIn(duration: 500.ms),
-                    const SizedBox(height: 24),
-                    Text(
-                      AppConfig.appName,
-                      style: AppTextStyles.displayLarge.copyWith(
-                        letterSpacing: 1.2,
-                        foreground: Paint()..shader = const LinearGradient(
-                          colors: [AppColors.primary, AppColors.primaryLight],
-                        ).createShader(const Rect.fromLTWH(0, 0, 200, 70)),
-                      ),
-                    ).animate().fadeIn(delay: 400.ms, duration: 600.ms).slideY(begin: 0.3, end: 0),
+                    const SizedBox(height: 28),
+                    Image.asset('assets/images/logo_light.png', height: 54)
+                        .animate().fadeIn(delay: 300.ms, duration: 600.ms)
+                        .slideY(begin: 0.3, end: 0),
                     const SizedBox(height: 8),
                     Text(AppConfig.brand.tagline, style: AppTextStyles.bodyMedium.copyWith(letterSpacing: 1.5))
                         .animate().fadeIn(delay: 700.ms, duration: 600.ms),

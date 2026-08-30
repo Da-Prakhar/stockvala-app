@@ -8,6 +8,7 @@ import '../../../core/providers/mt5_account_store.dart';
 import '../../../core/network/api_exception.dart';
 import '../../../shared/widgets/app_button.dart';
 import '../../finance/repository/finance_repository.dart';
+import '../../wallet_verification/screens/wallet_verification_screen.dart';
 
 class DepositScreen extends StatefulWidget {
   final bool isWithdraw;
@@ -97,16 +98,43 @@ class _DepositScreenState extends State<DepositScreen> {
         return Scaffold(
           backgroundColor: AppColors.bg100,
           appBar: AppBar(
+            backgroundColor: AppColors.bg100,
+            foregroundColor: AppColors.textPrimary,
+            elevation: 0,
             leading: IconButton(
               icon: const Icon(Icons.arrow_back_ios_new_rounded),
               onPressed: () => Navigator.pop(context),
             ),
-            title: Text(isW ? 'Withdraw Funds' : 'Deposit Funds'),
+            title: Text(isW ? 'Withdraw' : 'Deposit',
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
             centerTitle: true,
+            actions: const [
+              Padding(
+                padding: EdgeInsets.only(right: 14),
+                child: Icon(Icons.headset_mic_rounded, size: 23),
+              ),
+            ],
           ),
           body: SingleChildScrollView(
             padding: const EdgeInsets.all(20),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+
+              // ── Notice banner ────────────────────────────────────────────────
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: AppColors.warningBg,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  isW
+                      ? 'Withdrawals are reviewed by the broker and sent to your payout method.'
+                      : 'Min. deposit is \$${(_selectedMethod?.minAmount ?? 10).toStringAsFixed(0)} for ${_selectedMethod?.name ?? 'the selected method'}.',
+                  style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                ),
+              ),
+              const SizedBox(height: 14),
 
               // ── Balance card + account selector ──────────────────────────────
               _buildBalanceCard(context, store, acc, balance, isW),
@@ -145,6 +173,31 @@ class _DepositScreenState extends State<DepositScreen> {
 
               const SizedBox(height: 16),
 
+              if (isW) ...[
+                InkWell(
+                  onTap: () => Navigator.push(context, MaterialPageRoute(
+                      builder: (_) => const WalletVerificationScreen())),
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+                    decoration: BoxDecoration(
+                      color: AppColors.bg200,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Row(children: [
+                      Text('👛', style: TextStyle(fontSize: 17)),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text('Payout wallet verification',
+                            style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600,
+                                color: AppColors.textPrimary)),
+                      ),
+                      Icon(Icons.chevron_right_rounded, size: 20, color: AppColors.textMuted),
+                    ]),
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
               _buildSecurityBadge(),
 
               const SizedBox(height: 20),
@@ -294,8 +347,12 @@ class _DepositScreenState extends State<DepositScreen> {
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
           style: AppTextStyles.numericMedium,
           onChanged: (_) => setState(() {}),
-          decoration: const InputDecoration(
-              border: InputBorder.none, hintText: '0.00', isDense: true),
+          decoration: InputDecoration(
+              border: InputBorder.none,
+              hintText: 'Min ${(_selectedMethod?.minAmount ?? 10).toStringAsFixed(0)}',
+              hintStyle: const TextStyle(color: AppColors.textDisabled,
+                  fontSize: 22, fontWeight: FontWeight.w800),
+              isDense: true),
         )),
         if (isW && acc != null)
           GestureDetector(

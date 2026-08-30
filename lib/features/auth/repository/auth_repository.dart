@@ -135,7 +135,8 @@ class AuthRepository {
   // ── Change password ─────────────────────────────────────────────────────────
   Future<void> changePassword({required String current, required String newPass}) async {
     try {
-      await _api.post('/auth/change-password', data: {'current_password': current, 'new_password': newPass});
+      // v7: PUT /users/change-password {currentPassword, newPassword}
+      await _api.put('/users/change-password', data: {'currentPassword': current, 'newPassword': newPass});
     } catch (e) {
       throw extractApiException(e);
     }

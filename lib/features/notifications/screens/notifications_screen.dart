@@ -1,20 +1,23 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_animate/flutter_animate.dart';
 import '../../../core/theme/app_colors.dart';
-import '../../../core/theme/app_text_styles.dart';
+import '../../../shared/widgets/vantage.dart';
 import '../repository/notifications_repository.dart';
 
+/// V2 Messages — tabbed inbox with icon rows, red unread dots and
+/// "View Detail" links.
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
-
   @override
   State<NotificationsScreen> createState() => _NotificationsScreenState();
 }
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
+  final _repo = NotificationsRepository.instance;
   List<AppNotification> _items = [];
   bool _loading = true;
-  String? _error;
+  int _tab = 0;
+
+  static const _tabs = ['All', 'Trade', 'Account', 'System'];
 
   @override
   void initState() {
@@ -23,170 +26,214 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   }
 
   Future<void> _load() async {
-    setState(() { _loading = true; _error = null; });
+    setState(() => _loading = _items.isEmpty);
     try {
-      final items = await NotificationsRepository.instance.getNotifications();
+      final items = await _repo.getNotifications(limit: 50);
       if (mounted) setState(() { _items = items; _loading = false; });
-    } catch (e) {
-      if (mounted) setState(() { _loading = false; _error = e.toString(); });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
-  Future<void> _markAllRead() async {
-    await NotificationsRepository.instance.markAllRead();
-    setState(() {
-      _items = _items.map((n) => AppNotification(
-        id: n.id, title: n.title, body: n.body, type: n.type,
-        isRead: true, createdAt: n.createdAt, data: n.data,
-      )).toList();
-    });
+  List<AppNotification> get _visible {
+    if (_tab == 0) return _items;
+    final want = _tabs[_tab].toLowerCase();
+    return _items.where((n) {
+      final t = n.type.toLowerCase();
+      if (want == 'trade') return t.contains('trade') || t.contains('position');
+      if (want == 'account') {
+        return t.contains('account') || t.contains('deposit') ||
+            t.contains('withdraw') || t.contains('kyc');
+      }
+      return t == 'system' || t.isEmpty;
+    }).toList();
   }
 
-  Future<void> _markRead(AppNotification n) async {
-    if (n.isRead) return;
-    await NotificationsRepository.instance.markRead(n.id);
-    final idx = _items.indexWhere((x) => x.id == n.id);
-    if (idx >= 0 && mounted) {
+  String _emoji(String type) {
+    final t = type.toLowerCase();
+    if (t.contains('deposit') || t.contains('withdraw')) return '👛';
+    if (t.contains('trade') || t.contains('position')) return '📈';
+    if (t.contains('kyc') || t.contains('account')) return '👤';
+    return '📣';
+  }
+
+  String _date(DateTime d) =>
+      '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year} '
+      '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+
+  Future<void> _open(AppNotification n) async {
+    if (!n.isRead) {
+      _repo.markRead(n.id).catchError((_) {});
       setState(() {
-        _items[idx] = AppNotification(
-          id: n.id, title: n.title, body: n.body, type: n.type,
-          isRead: true, createdAt: n.createdAt, data: n.data,
-        );
+        _items = _items
+            .map((x) => x.id == n.id
+                ? AppNotification(id: x.id, title: x.title, body: x.body,
+                    type: x.type, isRead: true, createdAt: x.createdAt, data: x.data)
+                : x)
+            .toList();
       });
     }
+    if (!mounted) return;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(n.title,
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800,
+                    color: AppColors.textPrimary)),
+            const SizedBox(height: 6),
+            Text(_date(n.createdAt),
+                style: const TextStyle(fontSize: 12.5, color: AppColors.textMuted)),
+            const SizedBox(height: 14),
+            Text(n.body,
+                style: const TextStyle(fontSize: 14.5, height: 1.45,
+                    color: AppColors.textSecondary)),
+            const SizedBox(height: 10),
+          ]),
+        ),
+      ),
+    );
   }
-
-  static IconData _iconFor(String type) => switch (type) {
-    'trade' => Icons.trending_up_rounded,
-    'deposit' || 'withdrawal' => Icons.attach_money_rounded,
-    'kyc' => Icons.verified_user_rounded,
-    'margin' => Icons.warning_amber_rounded,
-    'copy_trading' => Icons.people_alt_rounded,
-    'pamm' => Icons.account_balance_rounded,
-    _ => Icons.notifications_rounded,
-  };
-
-  static Color _colorFor(String type) => switch (type) {
-    'trade' => AppColors.bullish,
-    'deposit' => AppColors.success,
-    'withdrawal' => AppColors.accent,
-    'kyc' => AppColors.primary,
-    'margin' => AppColors.error,
-    'copy_trading' => AppColors.primary,
-    'pamm' => AppColors.gold,
-    _ => AppColors.textMuted,
-  };
 
   @override
   Widget build(BuildContext context) {
+    final rows = _visible;
     return Scaffold(
       backgroundColor: AppColors.bg100,
       appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: const Text('Notifications'),
+        backgroundColor: AppColors.bg100,
+        foregroundColor: AppColors.textPrimary,
+        elevation: 0,
+        centerTitle: true,
+        title: const Text('Messages',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
         actions: [
-          if (_items.any((n) => !n.isRead))
-            TextButton(
-              onPressed: _markAllRead,
-              child: Text('Mark all read', style: AppTextStyles.labelSmall.copyWith(color: AppColors.primary)),
-            ),
+          IconButton(
+            tooltip: 'Mark all read',
+            onPressed: () async {
+              await _repo.markAllRead().catchError((_) {});
+              _load();
+            },
+            icon: const Icon(Icons.cleaning_services_rounded, size: 21),
+          ),
         ],
       ),
-      body: RefreshIndicator(
-        color: AppColors.primary,
-        onRefresh: _load,
-        child: _buildBody(),
-      ),
-    );
-  }
-
-  Widget _buildBody() {
-    if (_loading) return const Center(child: CircularProgressIndicator(color: AppColors.primary));
-    if (_error != null) return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-      const Icon(Icons.wifi_off_rounded, color: AppColors.textMuted, size: 48),
-      const SizedBox(height: 12),
-      const Text('Could not load notifications', style: AppTextStyles.bodyMedium),
-      const SizedBox(height: 8),
-      TextButton(onPressed: _load, child: const Text('Retry')),
-    ]));
-    if (_items.isEmpty) return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-      Container(padding: const EdgeInsets.all(20),
-          decoration: const BoxDecoration(color: AppColors.primaryLighter, shape: BoxShape.circle),
-          child: const Icon(Icons.notifications_none_rounded, color: AppColors.primary, size: 48)),
-      const SizedBox(height: 16),
-      const Text('No notifications', style: AppTextStyles.headingSmall),
-      const SizedBox(height: 8),
-      const Text('You\'re all caught up!', style: AppTextStyles.bodySmall),
-    ]));
-
-    return ListView.separated(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      itemCount: _items.length,
-      separatorBuilder: (_, __) => const Divider(height: 1, indent: 72),
-      itemBuilder: (context, i) {
-        final item = _items[i];
-        return GestureDetector(
-          onTap: () => _markRead(item),
-          child: _NotifTile(
-            icon: _iconFor(item.type),
-            color: _colorFor(item.type),
-            title: item.title,
-            body: item.body,
-            time: _relativeTime(item.createdAt),
-            unread: !item.isRead,
-          ).animate(delay: (i * 40).ms).fadeIn().slideX(begin: 0.05, end: 0),
-        );
-      },
-    );
-  }
-
-  String _relativeTime(DateTime dt) {
-    final diff = DateTime.now().difference(dt);
-    if (diff.inMinutes < 1) return 'Just now';
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-    if (diff.inHours < 24) return '${diff.inHours}h ago';
-    if (diff.inDays == 1) return 'Yesterday';
-    return '${diff.inDays} days ago';
-  }
-}
-
-class _NotifTile extends StatelessWidget {
-  final IconData icon;
-  final Color color;
-  final String title, body, time;
-  final bool unread;
-  const _NotifTile({required this.icon, required this.color, required this.title, required this.body, required this.time, required this.unread});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: unread ? AppColors.primary.withValues(alpha: 0.05) : Colors.transparent,
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
-        leading: Container(
-          width: 44, height: 44,
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(12),
+      body: Column(children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: VTextTabs(
+                tabs: _tabs,
+                selected: _tab,
+                onTap: (i) => setState(() => _tab = i),
+              ),
+            ),
           ),
-          child: Icon(icon, color: color, size: 22),
         ),
-        title: Text(title, style: AppTextStyles.labelMedium.copyWith(
-          color: unread ? AppColors.textPrimary : AppColors.textSecondary,
-        )),
-        subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const SizedBox(height: 2),
-          Text(body, style: AppTextStyles.caption),
-          const SizedBox(height: 4),
-          Text(time, style: AppTextStyles.caption.copyWith(color: AppColors.textMuted)),
-        ]),
-        trailing: unread
-            ? Container(width: 8, height: 8, decoration: const BoxDecoration(color: AppColors.primary, shape: BoxShape.circle))
-            : null,
-      ),
+        Expanded(
+          child: _loading
+              ? const Center(child: CircularProgressIndicator(
+                  strokeWidth: 2.5, color: AppColors.primary))
+              : rows.isEmpty
+                  ? const Center(
+                      child: Column(mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text('📭', style: TextStyle(fontSize: 44)),
+                            SizedBox(height: 10),
+                            Text('No messages',
+                                style: TextStyle(fontSize: 15,
+                                    color: AppColors.textMuted)),
+                          ]),
+                    )
+                  : RefreshIndicator(
+                      color: AppColors.primary,
+                      onRefresh: _load,
+                      child: ListView.separated(
+                        padding: const EdgeInsets.only(top: 6, bottom: 30),
+                        itemCount: rows.length,
+                        separatorBuilder: (_, __) => const Divider(
+                            height: 1, indent: 68, color: AppColors.borderLight),
+                        itemBuilder: (_, i) {
+                          final n = rows[i];
+                          return InkWell(
+                            onTap: () => _open(n),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 16, vertical: 13),
+                              child: Row(crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Stack(clipBehavior: Clip.none, children: [
+                                      Container(
+                                        width: 38, height: 38,
+                                        decoration: const BoxDecoration(
+                                            color: AppColors.bg300,
+                                            shape: BoxShape.circle),
+                                        alignment: Alignment.center,
+                                        child: Text(_emoji(n.type),
+                                            style: const TextStyle(fontSize: 17)),
+                                      ),
+                                      if (!n.isRead)
+                                        Positioned(
+                                          top: -1, right: -1,
+                                          child: Container(
+                                            width: 9, height: 9,
+                                            decoration: const BoxDecoration(
+                                                color: AppColors.error,
+                                                shape: BoxShape.circle),
+                                          ),
+                                        ),
+                                    ]),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(n.title,
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                    fontSize: 15.5,
+                                                    fontWeight: FontWeight.w700,
+                                                    color: AppColors.textPrimary)),
+                                            const SizedBox(height: 3),
+                                            Text(n.body,
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                    fontSize: 13.5, height: 1.3,
+                                                    color: AppColors.textSecondary)),
+                                            const SizedBox(height: 6),
+                                            Row(children: [
+                                              Text(_date(n.createdAt),
+                                                  style: const TextStyle(
+                                                      fontSize: 12,
+                                                      color: AppColors.textMuted)),
+                                              const Spacer(),
+                                              const Text('View Detail',
+                                                  style: TextStyle(fontSize: 12.5,
+                                                      fontWeight: FontWeight.w600,
+                                                      color: AppColors.primary)),
+                                            ]),
+                                          ]),
+                                    ),
+                                  ]),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+        ),
+      ]),
     );
   }
 }

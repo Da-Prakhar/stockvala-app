@@ -11,8 +11,17 @@ class Mt5Service {
     try {
       final res = await _api.get('/accounts');
       final body = res.data as Map<String, dynamic>;
-      final list = body['data'] as List<dynamic>? ?? [];
-      return list.map((j) => Mt5Account.fromJson(j as Map<String, dynamic>)).toList();
+      // Two envelope shapes in the wild:
+      //   v2/onefx: {data: [ ...accounts ]}
+      //   v7:       {data: {accounts: [...], accountLimit, accountCount}}
+      final d = body['data'];
+      final list = d is List
+          ? d
+          : (d is Map ? (d['accounts'] as List<dynamic>? ?? []) : <dynamic>[]);
+      return list
+          .whereType<Map>()
+          .map((j) => Mt5Account.fromJson(j.cast<String, dynamic>()))
+          .toList();
     } catch (e) {
       throw extractApiException(e);
     }

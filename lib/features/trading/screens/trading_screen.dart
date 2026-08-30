@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/network/websocket_service.dart';
+import '../../../core/network/api_exception.dart';
 import '../../../core/providers/mt5_account_store.dart';
 import '../../../core/services/spark_cache.dart';
 import '../../../shared/widgets/vantage.dart';
@@ -259,9 +260,17 @@ class _TradingScreenState extends State<TradingScreen>
       _loadPositions();
     } catch (e) {
       if (!mounted) return;
+      final msg = e is ApiException
+          ? e.message
+          : e.toString().replaceFirst('Exception: ', '');
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(e.toString().replaceFirst('ApiException: ', '')),
+        content: Row(children: [
+          const Icon(Icons.error_outline_rounded, color: Colors.white, size: 18),
+          const SizedBox(width: 8),
+          Expanded(child: Text('Order rejected: $msg', maxLines: 3)),
+        ]),
         backgroundColor: AppColors.error,
+        duration: const Duration(seconds: 6),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ));
@@ -688,36 +697,49 @@ class _TradingScreenState extends State<TradingScreen>
                     ),
                     const SizedBox(height: 10),
 
-                    // ── CTA ────────────────────────────────────────────
+                    // ── CTA — grays out to "Market Closed" on a stale quote ──
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: SizedBox(
-                        width: double.infinity,
-                        height: 56,
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: _placing
-                                ? AppColors.bg300
-                                : (_isBuy ? AppColors.bullish : AppColors.bearish),
-                            borderRadius: BorderRadius.circular(28),
-                          ),
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(28),
-                            onTap: _placing ? null : _placeOrder,
-                            child: Center(
-                              child: _placing
-                                  ? const SizedBox(width: 20, height: 20,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2.2, color: AppColors.textMuted))
-                                  : Text(
-                                      '${_isBuy ? 'Buy' : 'Sell'} ${_lots.toStringAsFixed(2)} Lots',
-                                      style: const TextStyle(fontSize: 17,
-                                          fontWeight: FontWeight.w700,
-                                          color: Colors.white)),
+                      child: Consumer<WebSocketService>(builder: (_, ws, __) {
+                        final tick = ws.tickFor(_selectedPair);
+                        // v7 refuses orders when the quote is >2 min old —
+                        // mirror it in the UI instead of letting the tap fail.
+                        final closed = tick == null ||
+                            (DateTime.now().millisecondsSinceEpoch - tick.ts) >
+                                120000;
+                        return SizedBox(
+                          width: double.infinity,
+                          height: 56,
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: closed || _placing
+                                  ? AppColors.bg300
+                                  : (_isBuy ? AppColors.bullish : AppColors.bearish),
+                              borderRadius: BorderRadius.circular(28),
+                            ),
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(28),
+                              onTap: closed || _placing ? null : _placeOrder,
+                              child: Center(
+                                child: _placing
+                                    ? const SizedBox(width: 20, height: 20,
+                                        child: CircularProgressIndicator(
+                                            strokeWidth: 2.2,
+                                            color: AppColors.textMuted))
+                                    : Text(
+                                        closed
+                                            ? 'Market Closed'
+                                            : '${_isBuy ? 'Buy' : 'Sell'} ${_lots.toStringAsFixed(2)} Lots',
+                                        style: TextStyle(fontSize: 17,
+                                            fontWeight: FontWeight.w700,
+                                            color: closed
+                                                ? AppColors.textMuted
+                                                : Colors.white)),
+                              ),
                             ),
                           ),
-                        ),
-                      ),
+                        );
+                      }),
                     ),
                     const SizedBox(height: 22),
 

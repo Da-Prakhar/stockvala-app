@@ -55,8 +55,10 @@ class QuoteTick {
   String get formattedPips => '${isBullish ? '+' : ''}${change.abs().toStringAsFixed(_decimals(sym) > 3 ? 1 : 0)} pts';
 
   int _decimals(String s) {
-    if (s.contains('JPY') || s.contains('US30') || s.contains('SPX') ||
-        s.contains('GER') || s.contains('BTC')) return 0;
+    if (s.contains('JPY')) return 3;
+    if (s.contains('BTC') || s.contains('ETH')) return 2;
+    if (s.contains('US30') || s.contains('SPX') || s.contains('GER') ||
+        s.contains('NAS') || s.contains('UK100') || s.contains('JPN')) return 2;
     if (s.contains('XAU') || s.contains('XAG') || s.contains('XPT') ||
         s.contains('OIL')) return 2;
     return 5;

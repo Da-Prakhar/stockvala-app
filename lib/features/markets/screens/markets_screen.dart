@@ -4,6 +4,8 @@ import 'package:provider/provider.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/network/websocket_service.dart';
 import '../../../core/services/spark_cache.dart';
+import '../../../core/services/watchlist_store.dart';
+import 'add_watchlist_screen.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/widgets/vantage.dart';
 import '../../trading/screens/trading_screen.dart';
@@ -23,7 +25,7 @@ class _MarketsScreenState extends State<MarketsScreen>
   bool _searchOpen = false;
   StreamSubscription<QuoteTick>? _tickSub;
   final Map<String, QuoteTick> _liveTicks = {};
-  final Set<String> _favorites = {'EURUSD', 'XAUUSD', 'BTCUSD'};
+  WatchlistStore get _wl => WatchlistStore.instance;
 
   static const _cats = ['All', 'Forex', 'Metals', 'Crypto', 'Indices', 'Energy'];
 
@@ -52,6 +54,8 @@ class _MarketsScreenState extends State<MarketsScreen>
   @override
   void initState() {
     super.initState();
+    _wl.load();
+    _wl.addListener(_onWatchlistChanged);
     _connect();
     _fetchSnapshot();
     for (final q in _symbolConfig) {
@@ -99,8 +103,19 @@ class _MarketsScreenState extends State<MarketsScreen>
     } catch (_) {/* socket fills in */}
   }
 
+  void _onWatchlistChanged() {
+    if (!mounted) return;
+    // New favorites need live prices + sparklines too.
+    WebSocketService.instance.subscribe(_wl.symbols);
+    for (final s in _wl.symbols) {
+      SparkCache.get(s).then((_) { if (mounted) setState(() {}); });
+    }
+    setState(() {});
+  }
+
   @override
   void dispose() {
+    _wl.removeListener(_onWatchlistChanged);
     _tickSub?.cancel();
     super.dispose();
   }
@@ -108,7 +123,16 @@ class _MarketsScreenState extends State<MarketsScreen>
   List<Map<String, String>> get _visible {
     Iterable<Map<String, String>> rows =
         _symbolConfig.map((e) => e.cast<String, String>());
-    if (_tab == 0) rows = rows.where((q) => _favorites.contains(q['sym']));
+    if (_tab == 0) {
+      final wl = _wl.symbols.toSet();
+      final known = _symbolConfig.map((q) => q['sym']).toSet();
+      rows = [
+        ...rows.where((q) => wl.contains(q['sym'])),
+        // starred symbols outside the curated list still show up
+        ...wl.where((s) => !known.contains(s)).map((s) =>
+            {'sym': s, 'name': s, 'cat': 'Other'}),
+      ];
+    }
     if (_cat != 'All') rows = rows.where((q) => q['cat'] == _cat);
     if (_search.isNotEmpty) {
       final s = _search.toUpperCase();
@@ -165,6 +189,13 @@ class _MarketsScreenState extends State<MarketsScreen>
               icon: Icon(_searchOpen ? Icons.close_rounded : Icons.search_rounded,
                   color: AppColors.textPrimary, size: 26),
             ),
+            IconButton(
+              tooltip: 'Add to Watchlist',
+              onPressed: () => Navigator.push(context, MaterialPageRoute(
+                  builder: (_) => const AddWatchlistScreen())),
+              icon: const Icon(Icons.add_circle_outline_rounded,
+                  color: AppColors.textPrimary, size: 25),
+            ),
           ]),
         ),
 
@@ -219,8 +250,16 @@ class _MarketsScreenState extends State<MarketsScreen>
                   child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
                   const Text('⭐', style: TextStyle(fontSize: 40)),
                   const SizedBox(height: 10),
-                  Text(_tab == 0 ? 'No favorites yet' : 'No instruments found',
+                  Text(_tab == 0 ? 'Your watchlist is empty' : 'No instruments found',
                       style: const TextStyle(fontSize: 15, color: AppColors.textMuted)),
+                  if (_tab == 0)
+                    TextButton(
+                      onPressed: () => Navigator.push(context, MaterialPageRoute(
+                          builder: (_) => const AddWatchlistScreen())),
+                      child: const Text('Add Symbols',
+                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700,
+                              color: AppColors.primary)),
+                    ),
                 ]))
               : ListView.builder(
                   padding: const EdgeInsets.only(top: 4, bottom: 110),
@@ -231,11 +270,7 @@ class _MarketsScreenState extends State<MarketsScreen>
                     final tick = _liveTicks[sym] ?? WebSocketService.instance.tickFor(sym);
                     final spark = SparkCache.peek(sym) ?? const <double>[];
                     return GestureDetector(
-                      onLongPress: () => setState(() {
-                        _favorites.contains(sym)
-                            ? _favorites.remove(sym)
-                            : _favorites.add(sym);
-                      }),
+                      onLongPress: () => _wl.toggle(sym),
                       child: SymbolRow(
                         symbol: sym,
                         subtitle: q['name']!,

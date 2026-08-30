@@ -50,7 +50,9 @@ class _TradingScreenState extends State<TradingScreen>
   Timer? _tickBackstop;
   Timer? _posTimer;
   List<TradingPosition> _positions = [];
-  int _bottomTab = 0; // Positions | Pending
+  List<TradeHistory> _history = [];
+  bool _historyLoading = false;
+  int _bottomTab = 0; // Positions | Pending | History
 
   @override
   bool get wantKeepAlive => true;
@@ -96,6 +98,19 @@ class _TradingScreenState extends State<TradingScreen>
       final p = await TradingRepository.instance.getPositions(accountId: acc.id);
       if (mounted) setState(() => _positions = p);
     } catch (_) {}
+  }
+
+  Future<void> _loadHistory() async {
+    final acc = Mt5AccountStore.instance.active;
+    if (acc == null) return;
+    setState(() => _historyLoading = _history.isEmpty);
+    try {
+      final h = await TradingRepository.instance
+          .getHistory(accountId: acc.id, limit: 50);
+      if (mounted) setState(() { _history = h; _historyLoading = false; });
+    } catch (_) {
+      if (mounted) setState(() => _historyLoading = false);
+    }
   }
 
   @override
@@ -747,14 +762,34 @@ class _TradingScreenState extends State<TradingScreen>
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       child: VTextTabs(
-                        tabs: ['Positions(${_positions.length})', 'Pending Orders(0)'],
+                        tabs: ['Positions(${_positions.length})', 'Pending(0)', 'History'],
                         selected: _bottomTab,
                         fontSize: 16,
-                        onTap: (i) => setState(() => _bottomTab = i),
+                        onTap: (i) {
+                          setState(() => _bottomTab = i);
+                          if (i == 2) _loadHistory();
+                        },
                       ),
                     ),
                     const SizedBox(height: 6),
-                    if (_bottomTab == 1 || _positions.isEmpty)
+                    if (_bottomTab == 2) ...[
+                      if (_historyLoading)
+                        const Padding(
+                          padding: EdgeInsets.all(28),
+                          child: Center(child: CircularProgressIndicator(
+                              strokeWidth: 2.5, color: AppColors.primary)),
+                        )
+                      else if (_history.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.all(28),
+                          child: Center(
+                              child: Text('No closed trades yet',
+                                  style: TextStyle(fontSize: 14,
+                                      color: AppColors.textMuted))),
+                        )
+                      else
+                        ..._history.map((h) => _HistoryRow(trade: h)),
+                    ] else if (_bottomTab == 1 || _positions.isEmpty)
                       const Padding(
                         padding: EdgeInsets.all(28),
                         child: Center(
@@ -807,6 +842,67 @@ class _SideButton extends StatelessWidget {
           ]),
         ),
       );
+}
+
+class _HistoryRow extends StatelessWidget {
+  final TradeHistory trade;
+  const _HistoryRow({required this.trade});
+
+  @override
+  Widget build(BuildContext context) {
+    final h = trade;
+    final isBuy = h.side == OrderSide.buy;
+    final pc = h.profit >= 0 ? AppColors.bullish : AppColors.bearish;
+    final t = h.closeTime;
+    String two(int v) => v.toString().padLeft(2, '0');
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+      child: VCard(
+        padding: const EdgeInsets.all(14),
+        child: Row(children: [
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Text(h.symbol,
+                    style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w800,
+                        color: AppColors.textPrimary)),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: isBuy ? AppColors.bullishBg : AppColors.bearishBg,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text('${isBuy ? 'Buy' : 'Sell'} ${h.lots.toStringAsFixed(2)}',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+                          color: isBuy ? AppColors.bullish : AppColors.bearish)),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: AppColors.bg300,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Text('Closed',
+                      style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700,
+                          color: AppColors.textSecondary)),
+                ),
+              ]),
+              const SizedBox(height: 4),
+              Text('${h.openPrice} → ${h.closePrice}',
+                  style: const TextStyle(fontSize: 12.5, color: AppColors.textMuted)),
+              const SizedBox(height: 2),
+              Text('${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}',
+                  style: const TextStyle(fontSize: 11.5, color: AppColors.textDisabled)),
+            ]),
+          ),
+          Text('${h.profit >= 0 ? '+' : ''}${h.profit.toStringAsFixed(2)}',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: pc)),
+        ]),
+      ),
+    );
+  }
 }
 
 class _PositionRow extends StatelessWidget {

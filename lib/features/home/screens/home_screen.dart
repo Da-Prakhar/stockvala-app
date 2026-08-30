@@ -5,6 +5,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/providers/mt5_account_store.dart';
 import '../../../core/network/websocket_service.dart';
 import '../../../core/services/spark_cache.dart';
+import '../../../core/services/watchlist_store.dart';
 import '../../../shared/widgets/vantage.dart';
 import '../../copy_trading/repository/copy_trading_repository.dart';
 import '../../copy_trading/screens/copy_trading_screen.dart';
@@ -81,6 +82,8 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
   @override
   void initState() {
     super.initState();
+    WatchlistStore.instance.load();
+    WatchlistStore.instance.addListener(_onWatchlist);
     _initMarket();
     _loadStrategies();
     for (final s in _watchSymbols) {
@@ -96,8 +99,19 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
     });
   }
 
+  void _onWatchlist() {
+    if (!mounted) return;
+    final syms = WatchlistStore.instance.symbols;
+    WebSocketService.instance.subscribe(syms);
+    for (final s in syms) {
+      SparkCache.get(s).then((_) { if (mounted) setState(() {}); });
+    }
+    setState(() {});
+  }
+
   @override
   void dispose() {
+    WatchlistStore.instance.removeListener(_onWatchlist);
     _promoTimer?.cancel();
     _promoCtrl.dispose();
     super.dispose();
@@ -350,7 +364,9 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
             Consumer<WebSocketService>(
               builder: (_, ws, __) => Column(
                 children: [
-                  for (final sym in _watchSymbols)
+                  for (final sym in (WatchlistStore.instance.symbols.isEmpty
+                      ? _watchSymbols
+                      : WatchlistStore.instance.symbols))
                     Builder(builder: (context) {
                       final tick = ws.tickFor(sym);
                       final spark = SparkCache.peek(sym) ?? const <double>[];

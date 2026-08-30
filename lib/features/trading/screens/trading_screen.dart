@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
@@ -8,6 +9,8 @@ import '../../../core/network/api_exception.dart';
 import '../../../core/providers/mt5_account_store.dart';
 import '../models/trading_models.dart';
 import '../repository/trading_repository.dart';
+import '../repository/market_data_repository.dart';
+import '../widgets/candle_chart.dart';
 
 class TradingScreen extends StatefulWidget {
   const TradingScreen({super.key});
@@ -22,6 +25,7 @@ class _TradingScreenState extends State<TradingScreen> with SingleTickerProvider
   String _orderType    = 'Market';
   bool   _placing      = false;
   final _lotCtrl = TextEditingController(text: '0.10');
+  Timer? _tickBackstop;
   final _slCtrl  = TextEditingController();
   final _tpCtrl  = TextEditingController();
 
@@ -37,10 +41,27 @@ class _TradingScreenState extends State<TradingScreen> with SingleTickerProvider
   void initState() {
     super.initState();
     WebSocketService.instance.subscribe(_pairs);
+    _startTickBackstop();
+  }
+
+  /// v7 pattern — REST tick poll as a backstop for the selected pair, so the
+  /// price header fills instantly on open and keeps working if the socket is
+  /// quiet. Fetches feed the SAME buffered pipeline the socket uses.
+  void _startTickBackstop() {
+    _tickBackstop?.cancel();
+    Future<void> poll() async {
+      final sym = _selectedPair;
+      final t = await MarketDataRepository.instance.getTick(sym);
+      if (t != null) {
+        WebSocketService.instance.ingestRest(sym, t.bid, t.ask, epochSecs: t.time);
+      }
+    }
+    poll();
+    _tickBackstop = Timer.periodic(const Duration(seconds: 3), (_) => poll());
   }
 
   @override
-  void dispose() { _lotCtrl.dispose(); _slCtrl.dispose(); _tpCtrl.dispose(); super.dispose(); }
+  void dispose() { _tickBackstop?.cancel(); _lotCtrl.dispose(); _slCtrl.dispose(); _tpCtrl.dispose(); super.dispose(); }
 
   String get _displayPair => _displayNames[_selectedPair] ?? _selectedPair;
 
@@ -58,6 +79,7 @@ class _TradingScreenState extends State<TradingScreen> with SingleTickerProvider
                 final sym = _displayNames.entries.firstWhere((e) => e.value == name, orElse: () => MapEntry(name, name)).key;
                 setState(() => _selectedPair = sym);
                 WebSocketService.instance.subscribe([sym]);
+                _startTickBackstop();
               },
             ),
             actions: [
@@ -77,7 +99,7 @@ class _TradingScreenState extends State<TradingScreen> with SingleTickerProvider
           body: Column(children: [
             _PriceHeader(tick: tick, pair: _displayPair),
             _TimeframeBar(tfs: _tfs, selected: _selectedTf, onSelect: (t) => setState(() => _selectedTf = t)),
-            const Expanded(flex: 5, child: _ChartArea()),
+            Expanded(flex: 5, child: CandleChart(symbol: _selectedPair, timeframe: _selectedTf)),
             Expanded(flex: 4, child: _OrderTicket(
               isBuy: _isBuy, orderType: _orderType,
               lotCtrl: _lotCtrl, slCtrl: _slCtrl, tpCtrl: _tpCtrl,
@@ -266,42 +288,6 @@ class _TimeframeBar extends StatelessWidget {
         ),
       )).toList()),
     ),
-  );
-}
-
-class _ChartArea extends StatelessWidget {
-  const _ChartArea();
-  @override
-  Widget build(BuildContext context) => Container(
-    color: AppColors.bg100,
-    child: Stack(children: [
-      Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-        Container(padding: const EdgeInsets.all(20),
-            decoration: const BoxDecoration(color: AppColors.primaryLighter, shape: BoxShape.circle),
-            child: const Icon(Icons.candlestick_chart_rounded, color: AppColors.primary, size: 56)),
-        const SizedBox(height: 12),
-        const Text('Live MT5 Chart', style: AppTextStyles.bodyMedium),
-        const Text('Embed WebView with MT5 Web Terminal', style: AppTextStyles.bodySmall),
-      ])),
-      Positioned(top: 8, right: 8, child: Row(children: [
-        _CTool(Icons.show_chart_rounded),
-        const SizedBox(width: 6),
-        _CTool(Icons.draw_rounded),
-        const SizedBox(width: 6),
-        _CTool(Icons.settings_outlined),
-      ])),
-    ]),
-  );
-}
-
-class _CTool extends StatelessWidget {
-  final IconData icon;
-  const _CTool(this.icon);
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(6),
-    decoration: BoxDecoration(color: AppColors.bg200, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppColors.border)),
-    child: Icon(icon, color: AppColors.textMuted, size: 18),
   );
 }
 

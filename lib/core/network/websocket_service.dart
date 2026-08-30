@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import '../constants/app_constants.dart';
 import '../storage/secure_storage.dart';
@@ -30,6 +32,10 @@ class QuoteTick {
   });
 
   bool get isBullish => changePct >= 0;
+
+  /// True when this tick came off the disk cache / an old session rather
+  /// than the live feed. Used to render prices dimmed until fresh data lands.
+  bool get isStale => DateTime.now().millisecondsSinceEpoch - ts > 60000;
 
   String get formattedBid => bid.toStringAsFixed(_decimals(sym));
   String get formattedAsk => ask.toStringAsFixed(_decimals(sym));
@@ -89,9 +95,21 @@ class WebSocketService extends ChangeNotifier {
   IO.Socket? _socket;
   bool _connected = false;
 
-  // Symbol → latest tick
+  // Symbol → latest committed tick (what the UI reads)
   final Map<String, QuoteTick> _ticks = {};
   final _tickController = StreamController<QuoteTick>.broadcast();
+
+  /* ═══════════════════════════════════════════════════
+     V7-style buffered pipeline.
+     Raw socket events land in _pending; a 100ms timer
+     commits them to _ticks and notifies ONCE per flush,
+     so 30 symbols ticking each second cause 10 rebuilds/s
+     max instead of 30+.
+     ═══════════════════════════════════════════════════ */
+  final Map<String, QuoteTick> _pending = {};
+  Timer? _flushTimer;
+  bool _dirtySinceSave = false;
+  DateTime _lastSave = DateTime.fromMillisecondsSinceEpoch(0);
 
   // Subscriptions to re-send on reconnect
   final Set<String> _subscriptions = {};
@@ -107,11 +125,124 @@ class WebSocketService extends ChangeNotifier {
   /// The backend strips broker suffixes (.# / .pro) and uses plain names.
   static String normalizeSymbol(String sym) => sym.replaceAll('/', '');
 
+  /* ═══════════════════════════════════════════════════
+     Disk price cache — the v7 module-level _priceCache,
+     but surviving app restarts. Load on startup so every
+     screen shows last-known prices instantly; the live
+     feed overwrites them as soon as it connects.
+     ═══════════════════════════════════════════════════ */
+  static const _cacheKey = 'sv_price_cache_v1';
+  bool _cacheLoaded = false;
+
+  Future<void> warmupFromDisk() async {
+    if (_cacheLoaded) return;
+    _cacheLoaded = true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_cacheKey);
+      if (raw == null) return;
+      final Map<String, dynamic> m = jsonDecode(raw) as Map<String, dynamic>;
+      int loaded = 0;
+      m.forEach((sym, v) {
+        if (_ticks.containsKey(sym)) return; // live data already there — don't regress
+        final j = (v as Map).cast<String, dynamic>();
+        final bid = (j['bid'] as num? ?? 0).toDouble();
+        if (bid <= 0) return;
+        final ask = (j['ask'] as num? ?? bid).toDouble();
+        _ticks[sym] = QuoteTick(
+          sym: sym,
+          bid: bid,
+          ask: ask,
+          spread: ask - bid,
+          high: bid,
+          low: bid,
+          ts: (j['ts'] as num? ?? 0).toInt(),
+        );
+        loaded++;
+      });
+      if (loaded > 0) {
+        debugPrint('[WS] price cache warmed: $loaded symbols');
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('[WS] price cache load failed: $e');
+    }
+  }
+
+  Future<void> _saveCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final m = <String, dynamic>{};
+      _ticks.forEach((sym, t) {
+        if (t.bid > 0 && !sym.contains('.')) {
+          m[sym] = {'bid': t.bid, 'ask': t.ask, 'ts': t.ts};
+        }
+      });
+      await prefs.setString(_cacheKey, jsonEncode(m));
+    } catch (_) {/* cache write is best-effort */}
+  }
+
+  void _startFlushLoop() {
+    _flushTimer ??= Timer.periodic(const Duration(milliseconds: 100), (_) {
+      if (_pending.isEmpty) return;
+      final batch = Map<String, QuoteTick>.from(_pending);
+      _pending.clear();
+      batch.forEach((sym, tick) {
+        _ticks[sym] = tick;
+        _tickController.add(tick);
+      });
+      _dirtySinceSave = true;
+      notifyListeners();
+
+      // Throttled write-through to disk (at most every 5s)
+      final now = DateTime.now();
+      if (_dirtySinceSave && now.difference(_lastSave).inSeconds >= 5) {
+        _lastSave = now;
+        _dirtySinceSave = false;
+        _saveCache();
+      }
+    });
+  }
+
+  /// Feed a REST-fetched price into the same pipeline the socket uses —
+  /// v7's REST backstop wrote into the same priceBuffer as the socket.
+  /// Skipped when the socket already delivered a fresher tick.
+  void ingestRest(String symbol, double bid, double ask, {int? epochSecs}) {
+    if (bid <= 0 && ask <= 0) return;
+    final sym = normalizeSymbol(symbol).replaceAll('.#', '');
+    final ts = (epochSecs != null && epochSecs > 0)
+        ? epochSecs * 1000
+        : DateTime.now().millisecondsSinceEpoch;
+    final existing = _pending[sym] ?? _ticks[sym];
+    if (existing != null && existing.ts >= ts && !existing.isStale) return;
+    final prev = _ticks[sym];
+    final b = bid > 0 ? bid : ask;
+    final a = ask > 0 ? ask : bid;
+    final prevBid = prev?.bid ?? b;
+    final change = b - prevBid;
+    _pending[sym] = QuoteTick(
+      sym: sym,
+      bid: b,
+      ask: a,
+      change: change,
+      changePct: prevBid != 0 ? (change / prevBid) * 100 : 0.0,
+      spread: a - b,
+      high: prev != null && prev.high > b ? prev.high : b,
+      low: prev != null && prev.low > 0 && prev.low < b ? prev.low : b,
+      ts: ts,
+    );
+    _startFlushLoop();
+  }
+
   // ── Connect using Socket.IO ──────────────────────────────────────────────────
   Future<void> connect() async {
     // Guard: if a socket object already exists (connected OR still connecting),
     // do not create another one.  socket_io_client handles reconnection internally.
     if (_socket != null) return;
+
+    // Seed last-known prices before the network round-trip.
+    await warmupFromDisk();
+    _startFlushLoop();
 
     final token = await SecureStorage().getString(AppConstants.tokenKey);
 
@@ -176,15 +307,14 @@ class WebSocketService extends ChangeNotifier {
     try {
       final sym = ((data['symbol'] as String?) ?? '').replaceAll('.#', '');
       if (sym.isEmpty) return;
-      final prev = _ticks[sym];
+      // Build against the freshest state we have (pending beats committed)
+      final prev = _pending[sym] ?? _ticks[sym];
       final tick = QuoteTick.fromSocketEvent(data, prev);
-      _ticks[sym] = tick;
+      // Buffer — committed to _ticks by the 100ms flush loop, NOT here.
+      _pending[sym] = tick;
       // Also store under the raw symbol name (with suffix) for lookup
       final rawSym = (data['symbol'] as String?) ?? sym;
-      if (rawSym != sym) _ticks[rawSym] = tick;
-      _tickController.add(tick);
-      debugPrint('[WS] tick ▶ $sym bid=${tick.bid} ask=${tick.ask}');
-      notifyListeners();
+      if (rawSym != sym) _pending[rawSym] = tick;
     } catch (e) {
       debugPrint('[WS] tick parse error: $e');
     }
@@ -225,6 +355,8 @@ class WebSocketService extends ChangeNotifier {
 
   @override
   void dispose() {
+    _flushTimer?.cancel();
+    _flushTimer = null;
     disconnect();
     _tickController.close();
     super.dispose();

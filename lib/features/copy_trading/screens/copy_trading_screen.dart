@@ -3,6 +3,9 @@ import 'package:flutter_animate/flutter_animate.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_text_styles.dart';
 import '../../../shared/widgets/app_button.dart';
+import '../../../core/network/api_exception.dart';
+import '../../../core/providers/mt5_account_store.dart';
+import '../repository/copy_trading_repository.dart';
 
 class CopyTradingScreen extends StatefulWidget {
   const CopyTradingScreen({super.key});
@@ -14,62 +17,182 @@ class _CopyTradingScreenState extends State<CopyTradingScreen> with SingleTicker
   late TabController _tab;
   String _filter = 'All';
 
-  // Reactive copy state — tracks which traders are actively being copied
-  late final Set<String> _copying;
+  final _repo = CopyTradingRepository.instance;
 
-  static const List<Map<String, dynamic>> _traders = [
-    {'name':'AlphaTrade Pro','avatar':'AT','roi':'+142.3%','monthly':'+18.4%','followers':1284,'win':72.4,'dd':12.3,'risk':'Medium','verified':true,'color':AppColors.primary,'trades':2847,'since':'Jan 2023','desc':'Professional forex trader with 8+ years experience. Specializes in EUR/USD, Gold and indices with strict risk management.'},
-    {'name':'GoldFX Master','avatar':'GF','roi':'+89.7%','monthly':'+11.2%','followers':892,'win':68.1,'dd':8.5,'risk':'Low','verified':true,'color':AppColors.gold,'trades':1423,'since':'Mar 2022','desc':'Conservative gold and commodity specialist. Low drawdown, consistent monthly returns.'},
-    {'name':'CryptoKing 2024','avatar':'CK','roi':'+234.6%','monthly':'+24.7%','followers':3421,'win':65.3,'dd':28.4,'risk':'High','verified':true,'color':Color(0xFF7C3AED),'trades':5234,'since':'Aug 2021','desc':'Aggressive crypto and BTC trader. High risk, high reward approach for experienced investors only.'},
-    {'name':'SafeHaven FX','avatar':'SH','roi':'+56.2%','monthly':'+7.8%','followers':654,'win':74.2,'dd':5.2,'risk':'Low','verified':false,'color':Color(0xFF0CAF60),'trades':987,'since':'Jun 2023','desc':'Ultra-conservative forex trader focused on capital preservation with slow steady growth.'},
-    {'name':'SwingPro Elite','avatar':'SP','roi':'+108.4%','monthly':'+14.2%','followers':2103,'win':70.1,'dd':18.6,'risk':'Medium','verified':true,'color':Color(0xFFE53935),'trades':3102,'since':'Nov 2022','desc':'Swing trading specialist across forex and commodities. Holds positions for 1-5 days.'},
-  ];
+  List<Map<String, dynamic>> _traders = [];
+  Map<String, dynamic> _totals = {};
+  List<Map<String, dynamic>> _followings = [];   // raw API rows
+  bool _loading = true;
+  String? _error;
+  bool _busy = false; // a follow/unfollow request is in flight
+
+  /// Names of masters I actively copy — derived from followings.
+  Set<String> get _copying => _followings
+      .where((f) => (f['status'] ?? '') == 'active')
+      .map((f) => ((f['master'] as Map?)?['displayName'] ?? '').toString())
+      .where((n) => n.isNotEmpty)
+      .toSet();
 
   @override
   void initState() {
     super.initState();
     _tab = TabController(length: 3, vsync: this);
-    // Pre-seed with AlphaTrade Pro as already copying (demo state)
-    _copying = {'AlphaTrade Pro'};
+    _loadAll();
+  }
+
+  Future<void> _loadAll() async {
+    setState(() { _loading = _traders.isEmpty; _error = null; });
+    try {
+      final results = await Future.wait([
+        _repo.getTopTraders(),
+        _repo.getFollowings(),
+      ]);
+      final top = results[0] as ({List<Map<String, dynamic>> traders, Map<String, dynamic> totals});
+      if (!mounted) return;
+      setState(() {
+        _traders = top.traders;
+        _totals = top.totals;
+        _followings = results[1] as List<Map<String, dynamic>>;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = e is ApiException ? e.message : e.toString();
+      });
+    }
   }
 
   @override
   void dispose() { _tab.dispose(); super.dispose(); }
 
-  void _toggleCopy(String traderName) {
-    setState(() {
-      if (_copying.contains(traderName)) {
-        _copying.remove(traderName);
-      } else {
-        _copying.add(traderName);
+  void _snack(String msg, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      backgroundColor: error ? AppColors.error : AppColors.success,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    ));
+  }
+
+  Future<void> _startCopy(Map<String, dynamic> trader, double amount, bool fixedLots) async {
+    if (_busy) return;
+    _busy = true;
+    try {
+      final acc = Mt5AccountStore.instance.active;
+      await _repo.follow(
+        (trader['id'] as num).toInt(),
+        allocationAmount: amount,
+        followerMt5AccountId: acc != null ? int.tryParse(acc.id) : null,
+        fixedLots: fixedLots,
+      );
+      _snack('Now copying ${trader['name']}! ✓');
+      await _loadAll();
+    } catch (e) {
+      _snack(e is ApiException ? e.message : 'Failed to start copying', error: true);
+    } finally {
+      _busy = false;
+    }
+  }
+
+  Future<void> _stopCopy(Map<String, dynamic> trader) async {
+    if (_busy) return;
+    _busy = true;
+    try {
+      await _repo.unfollow((trader['id'] as num).toInt());
+      _snack('Stopped copying ${trader['name']}', error: true);
+      await _loadAll();
+    } catch (e) {
+      _snack(e is ApiException ? e.message : 'Failed to stop copying', error: true);
+    } finally {
+      _busy = false;
+    }
+  }
+
+  /// Cards for the Copying tab, built from real followings.
+  List<Map<String, dynamic>> get _copyingCards {
+    final byName = {for (final t in _traders) t['name'] as String: t};
+    final cards = <Map<String, dynamic>>[];
+    for (final f in _followings.where((f) => (f['status'] ?? '') == 'active')) {
+      final name = ((f['master'] as Map?)?['displayName'] ?? '').toString();
+      final base = byName[name];
+      if (base != null) {
+        cards.add({
+          ...base,
+          'allocation': f['allocationAmount'],
+          'followingId': f['id'],
+        });
       }
-    });
+    }
+    return cards;
   }
 
   @override
   Widget build(BuildContext context) {
+    Widget topTab;
+    if (_loading) {
+      topTab = const Center(child: CircularProgressIndicator(strokeWidth: 2.5, color: AppColors.primary));
+    } else if (_error != null) {
+      topTab = _ErrorState(message: _error!, onRetry: _loadAll);
+    } else if (_traders.isEmpty) {
+      topTab = const _EmptyState(
+        icon: Icons.people_outline_rounded,
+        title: 'No signal providers yet',
+        subtitle: 'Approved master traders will appear here',
+      );
+    } else {
+      topTab = RefreshIndicator(
+        onRefresh: _loadAll,
+        color: AppColors.primary,
+        child: _TopTradersList(
+          traders: _traders,
+          totals: _totals,
+          filter: _filter,
+          onFilter: (f) => setState(() => _filter = f),
+          copying: _copying,
+          onStartCopy: _startCopy,
+          onStopCopy: _stopCopy,
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: AppColors.bg100,
       body: Column(children: [
         _CTHeader(tab: _tab),
         Expanded(child: TabBarView(controller: _tab, children: [
-          _TopTradersList(
-            traders: _traders,
-            filter: _filter,
-            onFilter: (f) => setState(() => _filter = f),
-            copying: _copying,
-            onToggleCopy: _toggleCopy,
-          ),
+          topTab,
           _CopyingList(
-            traders: _traders,
-            copying: _copying,
-            onToggleCopy: _toggleCopy,
+            cards: _copyingCards,
+            onStartCopy: _startCopy,
+            onStopCopy: _stopCopy,
           ),
-          const _SignalsTab(),
+          _SignalsTab(onApplied: _loadAll),
         ])),
       ]),
     );
   }
+}
+
+class _ErrorState extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+  const _ErrorState({required this.message, required this.onRetry});
+  @override
+  Widget build(BuildContext context) => Center(child: Padding(
+    padding: const EdgeInsets.all(32),
+    child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+      const Icon(Icons.cloud_off_rounded, color: AppColors.textMuted, size: 44),
+      const SizedBox(height: 12),
+      Text('Could not load traders', style: AppTextStyles.headingSmall),
+      const SizedBox(height: 6),
+      Text(message, style: AppTextStyles.bodySmall, textAlign: TextAlign.center, maxLines: 3),
+      const SizedBox(height: 14),
+      TextButton.icon(onPressed: onRetry, icon: const Icon(Icons.refresh_rounded, size: 16), label: const Text('Retry')),
+    ]),
+  ));
 }
 
 class _CTHeader extends StatelessWidget {
@@ -116,21 +239,38 @@ class _CTHeader extends StatelessWidget {
 
 class _TopTradersList extends StatelessWidget {
   final List<Map<String,dynamic>> traders;
+  final Map<String,dynamic> totals;
   final String filter;
   final ValueChanged<String> onFilter;
   final Set<String> copying;
-  final ValueChanged<String> onToggleCopy;
+  final void Function(Map<String,dynamic> trader, double amount, bool fixedLots) onStartCopy;
+  final void Function(Map<String,dynamic> trader) onStopCopy;
   const _TopTradersList({
-    required this.traders, required this.filter, required this.onFilter,
-    required this.copying, required this.onToggleCopy,
+    required this.traders, required this.totals, required this.filter, required this.onFilter,
+    required this.copying, required this.onStartCopy, required this.onStopCopy,
   });
+
+  List<Map<String,dynamic>> get _filtered {
+    var list = List<Map<String,dynamic>>.from(traders);
+    switch (filter) {
+      case 'Low Risk':    list = list.where((t) => t['risk'] == 'Low').toList();
+      case 'Medium Risk': list = list.where((t) => t['risk'] == 'Medium').toList();
+      case 'High ROI':
+        list.sort((a, b) => (double.tryParse((b['roi'] as String).replaceAll(RegExp(r'[+%]'), '')) ?? 0)
+            .compareTo(double.tryParse((a['roi'] as String).replaceAll(RegExp(r'[+%]'), '')) ?? 0));
+      case 'Most Followed':
+        list.sort((a, b) => (b['followers'] as int).compareTo(a['followers'] as int));
+    }
+    return list;
+  }
 
   @override
   Widget build(BuildContext context) {
     final filters = ['All','Low Risk','Medium Risk','High ROI','Most Followed'];
+    final shown = _filtered;
     return CustomScrollView(slivers: [
-      // Stats banner
-      SliverToBoxAdapter(child: _StatsBanner()),
+      // Stats banner — real platform totals from /copy-trading/discover
+      SliverToBoxAdapter(child: _StatsBanner(totals: totals)),
       // Filter chips
       SliverToBoxAdapter(child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
@@ -155,12 +295,13 @@ class _TopTradersList extends StatelessWidget {
       )),
       SliverList(delegate: SliverChildBuilderDelegate(
         (ctx, i) => _TraderCard(
-          trader: traders[i],
+          trader: shown[i],
           index: i,
-          isCopying: copying.contains(traders[i]['name'] as String),
-          onToggleCopy: onToggleCopy,
+          isCopying: copying.contains(shown[i]['name'] as String),
+          onStartCopy: onStartCopy,
+          onStopCopy: onStopCopy,
         ),
-        childCount: traders.length,
+        childCount: shown.length,
       )),
       const SliverToBoxAdapter(child: SizedBox(height: 80)),
     ]);
@@ -168,8 +309,16 @@ class _TopTradersList extends StatelessWidget {
 }
 
 class _StatsBanner extends StatelessWidget {
+  final Map<String,dynamic> totals;
+  const _StatsBanner({required this.totals});
+
+  static double _n(dynamic v) => v is num ? v.toDouble() : double.tryParse(v?.toString() ?? '') ?? 0;
+
   @override
   Widget build(BuildContext context) {
+    final providers = _n(totals['totalProviders']).toInt();
+    final copiers = _n(totals['totalCopiers']).toInt();
+    final profits = _n(totals['totalProfits']);
     return Container(
       margin: const EdgeInsets.all(16),
       padding: const EdgeInsets.all(16),
@@ -179,11 +328,11 @@ class _StatsBanner extends StatelessWidget {
         border: Border.all(color: AppColors.primary.withValues(alpha:0.2)),
       ),
       child: Row(children: [
-        _SB('5,280+', 'Active Traders'),
+        _SB('$providers', 'Signal Providers'),
         _SDivider(),
-        _SB('\$24M+', 'Copy Volume'),
+        _SB('$copiers', 'Active Copiers'),
         _SDivider(),
-        _SB('68.3%', 'Avg Win Rate'),
+        _SB('${profits >= 0 ? '+' : '-'}\$${profits.abs().toStringAsFixed(0)}', 'Copier Profits'),
       ]),
     ).animate().fadeIn().slideY(begin: 0.2, end: 0);
   }
@@ -208,12 +357,14 @@ class _TraderCard extends StatelessWidget {
   final Map<String,dynamic> trader;
   final int index;
   final bool isCopying;
-  final ValueChanged<String> onToggleCopy;
+  final void Function(Map<String,dynamic> trader, double amount, bool fixedLots) onStartCopy;
+  final void Function(Map<String,dynamic> trader) onStopCopy;
   const _TraderCard({
     required this.trader,
     required this.index,
     required this.isCopying,
-    required this.onToggleCopy,
+    required this.onStartCopy,
+    required this.onStopCopy,
   });
 
   @override
@@ -227,7 +378,8 @@ class _TraderCard extends StatelessWidget {
         builder: (_) => TraderDetailScreen(
           trader: trader,
           isCopying: isCopying,
-          onToggleCopy: () => onToggleCopy(trader['name'] as String),
+          onStartCopy: onStartCopy,
+          onStopCopy: onStopCopy,
         ),
       )),
       child: Container(
@@ -343,13 +495,7 @@ class _TraderCard extends StatelessWidget {
           TextButton(
             onPressed: () {
               Navigator.pop(ctx);
-              onToggleCopy(t['name'] as String);
-              ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
-                content: Text('Stopped copying ${t['name']}'),
-                backgroundColor: AppColors.error,
-                behavior: SnackBarBehavior.floating,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ));
+              onStopCopy(t);
             },
             child: const Text('Stop Copying', style: TextStyle(color: AppColors.error, fontWeight: FontWeight.w700)),
           ),
@@ -365,7 +511,7 @@ class _TraderCard extends StatelessWidget {
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (_) => _CopySheet(
         trader: t,
-        onConfirm: () => onToggleCopy(t['name'] as String),
+        onConfirm: (amount, fixedLots) => onStartCopy(t, amount, fixedLots),
       ),
     );
   }
@@ -399,30 +545,48 @@ class _RiskPill extends StatelessWidget {
 class TraderDetailScreen extends StatefulWidget {
   final Map<String,dynamic> trader;
   final bool isCopying;
-  final VoidCallback onToggleCopy;
-  const TraderDetailScreen({super.key, required this.trader, this.isCopying = false, required this.onToggleCopy});
+  final void Function(Map<String,dynamic> trader, double amount, bool fixedLots) onStartCopy;
+  final void Function(Map<String,dynamic> trader) onStopCopy;
+  const TraderDetailScreen({super.key, required this.trader, this.isCopying = false,
+      required this.onStartCopy, required this.onStopCopy});
   @override
   State<TraderDetailScreen> createState() => _TraderDetailScreenState();
 }
 
 class _TraderDetailScreenState extends State<TraderDetailScreen> with SingleTickerProviderStateMixin {
   late TabController _tab;
+
+  List<Map<String,dynamic>> _liveDeals = [];
+  List<Map<String,dynamic>> _copiers = [];
+  double _liveEquity = 0;
+
   @override
-  void initState() { super.initState(); _tab = TabController(length: 4, vsync: this); }
+  void initState() {
+    super.initState();
+    _tab = TabController(length: 4, vsync: this);
+    _loadDetail();
+  }
+
+  Future<void> _loadDetail() async {
+    final id = (widget.trader['id'] as num?)?.toInt();
+    if (id == null) return;
+    try {
+      final results = await Future.wait([
+        CopyTradingRepository.instance.getMasterDetail(id),
+        CopyTradingRepository.instance.getMasterCopiers(id),
+      ]);
+      if (!mounted) return;
+      final detail = results[0] as Map<String,dynamic>;
+      setState(() {
+        _liveDeals = CopyTradingRepository.mapLivePositions(detail);
+        _copiers = results[1] as List<Map<String,dynamic>>;
+        _liveEquity = ((detail['liveAccount'] as Map?)?['equity'] as num?)?.toDouble() ?? 0;
+      });
+    } catch (_) {/* keep the card data */}
+  }
+
   @override
   void dispose() { _tab.dispose(); super.dispose(); }
-
-  // Sample deals generated from CRM
-  static const _deals = [
-    {'sym':'EUR/USD','side':'buy','vol':'0.10','open':'1.08210','close':'1.08542','profit':33.20,'date':'2026-06-06 14:22'},
-    {'sym':'XAU/USD','side':'buy','vol':'0.05','open':'2318.50','close':'2341.80','profit':116.50,'date':'2026-06-05 10:08'},
-    {'sym':'GBP/USD','side':'sell','vol':'0.10','open':'1.27210','close':'1.26980','profit':23.00,'date':'2026-06-04 09:15'},
-    {'sym':'EUR/USD','side':'buy','vol':'0.20','open':'1.07840','close':'1.07620','profit':-44.00,'date':'2026-06-03 18:41'},
-    {'sym':'BTC/USD','side':'buy','vol':'0.01','open':'66800','close':'67420','profit':62.00,'date':'2026-06-02 22:10'},
-    {'sym':'USD/JPY','side':'sell','vol':'0.10','open':'156.820','close':'156.420','profit':25.60,'date':'2026-06-01 11:55'},
-    {'sym':'EUR/USD','side':'buy','vol':'0.15','open':'1.08010','close':'1.08190','profit':27.00,'date':'2026-05-31 08:33'},
-    {'sym':'XAU/USD','side':'sell','vol':'0.03','open':'2335.20','close':'2358.40','profit':-69.60,'date':'2026-05-30 16:50'},
-  ];
 
   @override
   Widget build(BuildContext context) {
@@ -501,8 +665,8 @@ class _TraderDetailScreenState extends State<TraderDetailScreen> with SingleTick
         body: TabBarView(controller: _tab, children: [
           _OverviewTab(trader: t),
           _PerformanceTab(trader: t),
-          _DealsTab(deals: _deals),
-          _CopiersTab(trader: t),
+          _DealsTab(deals: _liveDeals),
+          _CopiersTab(trader: t, copiers: _copiers, liveEquity: _liveEquity),
         ]),
       ),
       bottomNavigationBar: Padding(
@@ -512,19 +676,19 @@ class _TraderDetailScreenState extends State<TraderDetailScreen> with SingleTick
           prefixIcon: widget.isCopying ? Icons.stop_circle_outlined : Icons.people_alt_rounded,
           onPressed: widget.isCopying
               ? () {
-                  widget.onToggleCopy();
+                  widget.onStopCopy(t);
                   Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                    content: Text('Stopped copying ${t['name']}'),
-                    backgroundColor: AppColors.error,
-                    behavior: SnackBarBehavior.floating,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  ));
                 }
               : () => showModalBottomSheet(
                   context: context, isScrollControlled: true,
                   shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-                  builder: (_) => _CopySheet(trader: t, onConfirm: widget.onToggleCopy),
+                  builder: (_) => _CopySheet(
+                    trader: t,
+                    onConfirm: (amount, fixedLots) {
+                      widget.onStartCopy(t, amount, fixedLots);
+                      Navigator.pop(context); // close detail after starting
+                    },
+                  ),
           ),
         ),
       ),
@@ -869,30 +1033,33 @@ class _DealRow extends StatelessWidget {
 // ── COPIERS TAB ───────────────────────────────────────────────────────────────
 class _CopiersTab extends StatelessWidget {
   final Map<String,dynamic> trader;
-  const _CopiersTab({required this.trader});
+  final List<Map<String,dynamic>> copiers;
+  final double liveEquity;
+  const _CopiersTab({required this.trader, required this.copiers, required this.liveEquity});
 
-  static const _copiers = [
-    {'name':'Rahul M.','since':'Jun 1, 2026','amount':'\$2,500','profit':'+\$184.20','active':true},
-    {'name':'Priya S.','since':'May 20, 2026','amount':'\$1,000','profit':'+\$73.80','active':true},
-    {'name':'Alex K.', 'since':'May 12, 2026','amount':'\$5,000','profit':'+\$368.00','active':true},
-    {'name':'Maria T.','since':'Apr 30, 2026','amount':'\$750', 'profit':'+\$55.10','active':false},
-    {'name':'David L.','since':'Apr 15, 2026','amount':'\$3,000','profit':'+\$221.40','active':true},
-  ];
+  List<Map<String,dynamic>> get _copiers => copiers;
 
   @override
   Widget build(BuildContext context) => Column(children: [
-    // Summary
+    // Summary — live equity + real copier count
     Container(
       padding: const EdgeInsets.all(16),
       decoration: const BoxDecoration(color: AppColors.bg200, border: Border(bottom: BorderSide(color: AppColors.border))),
       child: Row(children: [
         _BigStat('${trader['followers']}', 'Total Copiers', AppColors.primary),
         const SizedBox(width: 10),
-        _BigStat('\$24M+', 'Copy Volume', AppColors.bullish),
+        _BigStat('\$${liveEquity.toStringAsFixed(0)}', 'Master Equity', AppColors.bullish),
         const SizedBox(width: 10),
-        _BigStat('92%', 'Satisfaction', AppColors.accent),
+        _BigStat('${trader['win']}%', 'Win Rate', AppColors.accent),
       ]),
     ),
+    if (_copiers.isEmpty)
+      const Expanded(child: _EmptyState(
+        icon: Icons.people_outline_rounded,
+        title: 'No copiers yet',
+        subtitle: 'Copiers of this master will appear here',
+      ))
+    else
     Expanded(child: ListView.separated(
       padding: const EdgeInsets.all(16),
       itemCount: _copiers.length,
@@ -1019,16 +1186,19 @@ class _Bar extends StatelessWidget {
 // ── COPY SHEET ────────────────────────────────────────────────────────────────
 class _CopySheet extends StatefulWidget {
   final Map<String,dynamic> trader;
-  final VoidCallback onConfirm;
+  final void Function(double amount, bool fixedLots) onConfirm;
   const _CopySheet({required this.trader, required this.onConfirm});
   @override
   State<_CopySheet> createState() => _CopySheetState();
 }
 
 class _CopySheetState extends State<_CopySheet> {
-  final _ctrl = TextEditingController(text: '500');
-  bool _fixed = true;
+  late final TextEditingController _ctrl = TextEditingController(
+      text: ((widget.trader['minInvestment'] as num?)?.toDouble() ?? 500).toStringAsFixed(0));
+  bool _fixed = false; // ratio (proportional) is the platform default
   final List<double> _quickAmounts = [100, 250, 500, 1000, 2500];
+
+  double get _minInvestment => (widget.trader['minInvestment'] as num?)?.toDouble() ?? 0;
 
   @override
   Widget build(BuildContext context) {
@@ -1104,16 +1274,27 @@ class _CopySheetState extends State<_CopySheet> {
             Expanded(child: _ModeBtn('Proportional', Icons.percent_rounded, !_fixed, () => setState(() => _fixed = false))),
           ]),
           const SizedBox(height: 20),
+          if (_minInvestment > 0)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Text('Minimum investment: \$${_minInvestment.toStringAsFixed(0)}',
+                  style: AppTextStyles.caption),
+            ),
           AppButton(label: 'Start Copying ${widget.trader['name']}', onPressed: () {
-            widget.onConfirm(); // update parent copy state
-            final messenger = ScaffoldMessenger.of(context);
+            final amount = double.tryParse(_ctrl.text) ?? 0;
+            if (amount <= 0 || (_minInvestment > 0 && amount < _minInvestment)) {
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text(_minInvestment > 0
+                    ? 'Minimum investment is \$${_minInvestment.toStringAsFixed(0)}'
+                    : 'Enter a valid amount'),
+                backgroundColor: AppColors.error,
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ));
+              return;
+            }
             Navigator.pop(context);
-            messenger.showSnackBar(SnackBar(
-              content: Text('Now copying ${widget.trader['name']}! ✓'),
-              backgroundColor: AppColors.success,
-              behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ));
+            widget.onConfirm(amount, _fixed);
           }),
           const SizedBox(height: 8),
         ]),
@@ -1147,15 +1328,14 @@ class _ModeBtn extends StatelessWidget {
 
 // ── COPYING TAB ───────────────────────────────────────────────────────────────
 class _CopyingList extends StatelessWidget {
-  final List<Map<String,dynamic>> traders;
-  final Set<String> copying;
-  final ValueChanged<String> onToggleCopy;
-  const _CopyingList({required this.traders, required this.copying, required this.onToggleCopy});
+  final List<Map<String,dynamic>> cards;
+  final void Function(Map<String,dynamic> trader, double amount, bool fixedLots) onStartCopy;
+  final void Function(Map<String,dynamic> trader) onStopCopy;
+  const _CopyingList({required this.cards, required this.onStartCopy, required this.onStopCopy});
 
   @override
   Widget build(BuildContext context) {
-    final active = traders.where((t) => copying.contains(t['name'] as String)).toList();
-    if (active.isEmpty) {
+    if (cards.isEmpty) {
       return const _EmptyState(
         icon: Icons.people_outline_rounded,
         title: 'Not copying anyone yet',
@@ -1164,46 +1344,170 @@ class _CopyingList extends StatelessWidget {
     }
     return ListView.builder(
       padding: const EdgeInsets.all(16),
-      itemCount: active.length,
+      itemCount: cards.length,
       itemBuilder: (_, i) => _TraderCard(
-        trader: active[i],
+        trader: cards[i],
         index: i,
         isCopying: true,
-        onToggleCopy: onToggleCopy,
+        onStartCopy: onStartCopy,
+        onStopCopy: onStopCopy,
       ),
     );
   }
 }
 
 // ── SIGNALS TAB ───────────────────────────────────────────────────────────────
-class _SignalsTab extends StatelessWidget {
-  const _SignalsTab();
+class _SignalsTab extends StatefulWidget {
+  final VoidCallback onApplied;
+  const _SignalsTab({required this.onApplied});
   @override
-  Widget build(BuildContext context) => Center(child: Padding(
-    padding: const EdgeInsets.all(32),
-    child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-      Container(
-        padding: const EdgeInsets.all(24),
-        decoration: BoxDecoration(
-          gradient: AppColors.primaryGradient,
-          shape: BoxShape.circle,
-          boxShadow: [BoxShadow(color: AppColors.primary.withValues(alpha:0.3), blurRadius: 24)],
+  State<_SignalsTab> createState() => _SignalsTabState();
+}
+
+class _SignalsTabState extends State<_SignalsTab> {
+  Map<String, dynamic>? _profile;   // my master profile, if I applied
+  bool _loaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final p = await CopyTradingRepository.instance.getMyMasterProfile();
+    if (mounted) setState(() { _profile = p; _loaded = true; });
+  }
+
+  Future<void> _apply() async {
+    final acc = Mt5AccountStore.instance.active;
+    if (acc == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('You need an MT5 account first'), backgroundColor: AppColors.error));
+      return;
+    }
+    final nameCtrl = TextEditingController();
+    final descCtrl = TextEditingController();
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Apply as Signal Provider', style: AppTextStyles.headingSmall),
+            const SizedBox(height: 6),
+            Text('Account #${acc.login} will be your master account.', style: AppTextStyles.caption),
+            const SizedBox(height: 16),
+            TextField(controller: nameCtrl, decoration: const InputDecoration(hintText: 'Strategy display name')),
+            const SizedBox(height: 10),
+            TextField(controller: descCtrl, maxLines: 3, decoration: const InputDecoration(hintText: 'Describe your strategy (optional)')),
+            const SizedBox(height: 16),
+            AppButton(label: 'Submit Application', onPressed: () => Navigator.pop(ctx, true)),
+            const SizedBox(height: 8),
+          ]),
         ),
-        child: const Icon(Icons.signal_cellular_alt_rounded, color: Colors.white, size: 48),
-      ).animate().scale(duration: 600.ms, curve: Curves.elasticOut),
-      const SizedBox(height: 24),
-      Text('Become a Signal Provider', style: AppTextStyles.headingMedium, textAlign: TextAlign.center),
-      const SizedBox(height: 10),
-      Text('Share your trades and earn commission\nfrom every follower who copies you.',
-          style: AppTextStyles.bodyMedium, textAlign: TextAlign.center),
-      const SizedBox(height: 32),
-      _BenefitRow(Icons.attach_money_rounded, 'Earn up to 30% commission on profits'),
-      _BenefitRow(Icons.trending_up_rounded,  'Grow your follower base automatically'),
-      _BenefitRow(Icons.shield_outlined,       'Protected by our copy trade guarantee'),
-      const SizedBox(height: 32),
-      AppButton(label: 'Apply as Signal Provider', onPressed: () {}),
-    ]),
-  ));
+      ),
+    );
+    if (ok != true) return;
+    final name = nameCtrl.text.trim();
+    if (name.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Display name is required'), backgroundColor: AppColors.error));
+      }
+      return;
+    }
+    try {
+      await CopyTradingRepository.instance.applyAsMaster(
+        mt5AccountId: int.tryParse(acc.id) ?? 0,
+        displayName: name,
+        description: descCtrl.text.trim(),
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Application submitted — pending review'), backgroundColor: AppColors.success));
+      }
+      await _load();
+      widget.onApplied();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(e is ApiException ? e.message : 'Application failed'),
+          backgroundColor: AppColors.error));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loaded && _profile != null) {
+      final status = (_profile!['status'] ?? 'pending').toString();
+      final c = status == 'approved' ? AppColors.success
+          : status == 'rejected' ? AppColors.error : AppColors.warning;
+      return Center(child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(color: c.withValues(alpha: 0.12), shape: BoxShape.circle),
+            child: Icon(
+              status == 'approved' ? Icons.verified_rounded
+                  : status == 'rejected' ? Icons.cancel_outlined : Icons.hourglass_top_rounded,
+              color: c, size: 48),
+          ),
+          const SizedBox(height: 20),
+          Text((_profile!['displayName'] ?? 'Your strategy').toString(), style: AppTextStyles.headingMedium),
+          const SizedBox(height: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+            decoration: BoxDecoration(color: c.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(20)),
+            child: Text(status.toUpperCase(), style: TextStyle(color: c, fontSize: 12, fontWeight: FontWeight.w800)),
+          ),
+          const SizedBox(height: 14),
+          if (status == 'approved') ...[
+            Text('${_profile!['followerCount'] ?? _profile!['totalFollowers'] ?? 0} followers copying you',
+                style: AppTextStyles.bodyMedium),
+          ] else if (status == 'rejected' && _profile!['rejectionReason'] != null) ...[
+            Text('Reason: ${_profile!['rejectionReason']}', style: AppTextStyles.bodySmall, textAlign: TextAlign.center),
+            const SizedBox(height: 16),
+            AppButton(label: 'Re-apply', onPressed: _apply),
+          ] else ...[
+            Text('Your application is being reviewed by the broker.',
+                style: AppTextStyles.bodyMedium, textAlign: TextAlign.center),
+          ],
+        ]),
+      ));
+    }
+
+    return Center(child: Padding(
+      padding: const EdgeInsets.all(32),
+      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            gradient: AppColors.primaryGradient,
+            shape: BoxShape.circle,
+            boxShadow: [BoxShadow(color: AppColors.primary.withValues(alpha:0.3), blurRadius: 24)],
+          ),
+          child: const Icon(Icons.signal_cellular_alt_rounded, color: Colors.white, size: 48),
+        ).animate().scale(duration: 600.ms, curve: Curves.elasticOut),
+        const SizedBox(height: 24),
+        Text('Become a Signal Provider', style: AppTextStyles.headingMedium, textAlign: TextAlign.center),
+        const SizedBox(height: 10),
+        Text('Share your trades and earn commission\nfrom every follower who copies you.',
+            style: AppTextStyles.bodyMedium, textAlign: TextAlign.center),
+        const SizedBox(height: 32),
+        _BenefitRow(Icons.attach_money_rounded, 'Earn performance fees on profits'),
+        _BenefitRow(Icons.trending_up_rounded,  'Grow your follower base automatically'),
+        _BenefitRow(Icons.shield_outlined,       'Broker-reviewed and approved strategies'),
+        const SizedBox(height: 32),
+        AppButton(label: 'Apply as Signal Provider', onPressed: _apply),
+      ]),
+    ));
+  }
 }
 
 class _BenefitRow extends StatelessWidget {

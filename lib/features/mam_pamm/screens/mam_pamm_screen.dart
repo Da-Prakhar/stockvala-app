@@ -4,6 +4,9 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_text_styles.dart';
 import '../../../shared/widgets/app_button.dart';
 import '../../../shared/widgets/glass_card.dart';
+import '../../../core/network/api_exception.dart';
+import '../../../core/providers/mt5_account_store.dart';
+import '../repository/mam_pamm_repository.dart';
 
 class MamPammScreen extends StatefulWidget {
   const MamPammScreen({super.key});
@@ -15,56 +18,48 @@ class MamPammScreen extends StatefulWidget {
 class _MamPammScreenState extends State<MamPammScreen> with SingleTickerProviderStateMixin {
   late TabController _tab;
 
-  // Reactive investment state — tracks which funds have been invested in
-  final Set<String> _invested = {};
-  final Map<String, double> _myAmounts = {};
+  final _repo = MamPammRepository.instance;
 
-  static const List<Map<String, dynamic>> _funds = [
-    {
-      'name': 'AlphaGrowth PAMM',
-      'manager': 'AlphaTrade Capital',
-      'type': 'PAMM',
-      'minInvest': 500,
-      'roi12m': '+48.3%',
-      'monthlyAvg': '+3.8%',
-      'investors': 234,
-      'aum': '\$2.4M',
-      'dd': 14.2,
-      'color': AppColors.primary,
-    },
-    {
-      'name': 'SafeYield MAM',
-      'manager': 'SafeHaven Capital',
-      'type': 'MAM',
-      'minInvest': 1000,
-      'roi12m': '+28.7%',
-      'monthlyAvg': '+2.2%',
-      'investors': 89,
-      'aum': '\$890K',
-      'dd': 6.4,
-      'color': AppColors.gold,
-    },
-    {
-      'name': 'AggroFX PAMM',
-      'manager': 'FX Masters LLC',
-      'type': 'PAMM',
-      'minInvest': 250,
-      'roi12m': '+96.4%',
-      'monthlyAvg': '+7.2%',
-      'investors': 521,
-      'aum': '\$4.1M',
-      'dd': 32.8,
-      'color': AppColors.error,
-    },
-  ];
+  List<Map<String, dynamic>> _funds = [];
+  List<Map<String, dynamic>> _investments = [];   // raw API rows
+  bool _loading = true;
+  String? _error;
+  bool _busy = false;
+
+  Set<String> get _invested => _investments
+      .where((r) => r['status'] == 'active')
+      .map((r) => r['fundName'] as String)
+      .toSet();
+
+  Map<String, double> get _myAmounts => {
+        for (final r in _investments.where((r) => r['status'] == 'active'))
+          r['fundName'] as String: (r['amount'] as num).toDouble(),
+      };
 
   @override
   void initState() {
     super.initState();
     _tab = TabController(length: 2, vsync: this);
-    // Pre-seed AlphaGrowth PAMM as already invested (demo state)
-    _invested.add('AlphaGrowth PAMM');
-    _myAmounts['AlphaGrowth PAMM'] = 2500.0;
+    _loadAll();
+  }
+
+  Future<void> _loadAll() async {
+    setState(() { _loading = _funds.isEmpty; _error = null; });
+    try {
+      final results = await Future.wait([_repo.getFunds(), _repo.getInvestments()]);
+      if (!mounted) return;
+      setState(() {
+        _funds = results[0];
+        _investments = results[1];
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = e is ApiException ? e.message : e.toString();
+      });
+    }
   }
 
   @override
@@ -73,24 +68,100 @@ class _MamPammScreenState extends State<MamPammScreen> with SingleTickerProvider
     super.dispose();
   }
 
-  void _invest(String fundName, double amount) {
-    setState(() {
-      _invested.add(fundName);
-      _myAmounts[fundName] = amount;
-    });
+  void _snack(String msg, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      backgroundColor: error ? AppColors.error : AppColors.success,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    ));
   }
 
-  void _withdraw(String fundName) {
-    setState(() {
-      _invested.remove(fundName);
-      _myAmounts.remove(fundName);
-    });
+  Future<void> _invest(String fundName, double amount) async {
+    if (_busy) return;
+    _busy = true;
+    try {
+      final fund = _funds.firstWhere((f) => f['name'] == fundName);
+      final acc = Mt5AccountStore.instance.active;
+      await _repo.invest(
+        kind: fund['kind'] as String,
+        fundId: (fund['id'] as num).toInt(),
+        amount: amount,
+        mt5AccountId: acc != null ? int.tryParse(acc.id) : null,
+      );
+      _snack('Invested \$${amount.toStringAsFixed(0)} in $fundName ✓');
+      await _loadAll();
+    } catch (e) {
+      _snack(e is ApiException ? e.message : 'Investment failed', error: true);
+    } finally {
+      _busy = false;
+    }
+  }
+
+  Future<void> _withdraw(String fundName) async {
+    if (_busy) return;
+    _busy = true;
+    try {
+      final inv = _investments.firstWhere(
+          (r) => r['fundName'] == fundName && r['status'] == 'active');
+      await _repo.withdraw(
+        kind: inv['kind'] as String,
+        investmentId: (inv['id'] as num).toInt(),
+      );
+      _snack('Withdrawal from $fundName initiated');
+      await _loadAll();
+    } catch (e) {
+      _snack(e is ApiException ? e.message : 'Withdrawal failed', error: true);
+    } finally {
+      _busy = false;
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final investedFunds = _funds.where((f) => _invested.contains(f['name'] as String)).toList();
-    final totalInvested = _myAmounts.values.fold(0.0, (s, a) => s + a);
+    final invested = _invested;
+    final myAmounts = _myAmounts;
+    final investedFunds = _funds.where((f) => invested.contains(f['name'] as String)).toList();
+    final totalInvested = myAmounts.values.fold(0.0, (s, a) => s + a);
+
+    Widget fundsTab;
+    if (_loading) {
+      fundsTab = const Center(child: CircularProgressIndicator(strokeWidth: 2.5, color: AppColors.primary));
+    } else if (_error != null) {
+      fundsTab = Center(child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          const Icon(Icons.cloud_off_rounded, color: AppColors.textMuted, size: 44),
+          const SizedBox(height: 12),
+          Text('Could not load funds', style: AppTextStyles.headingSmall),
+          const SizedBox(height: 6),
+          Text(_error!, style: AppTextStyles.bodySmall, textAlign: TextAlign.center, maxLines: 3),
+          const SizedBox(height: 14),
+          TextButton.icon(onPressed: _loadAll, icon: const Icon(Icons.refresh_rounded, size: 16), label: const Text('Retry')),
+        ]),
+      ));
+    } else if (_funds.isEmpty) {
+      fundsTab = Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        const Icon(Icons.account_balance_outlined, color: AppColors.textMuted, size: 64),
+        const SizedBox(height: 16),
+        Text('No funds available yet', style: AppTextStyles.bodyMedium),
+        const SizedBox(height: 8),
+        Text('MAM/PAMM funds will appear here once the broker lists them', style: AppTextStyles.caption),
+      ]));
+    } else {
+      fundsTab = RefreshIndicator(
+        onRefresh: _loadAll,
+        color: AppColors.primary,
+        child: _FundsList(
+          funds: _funds,
+          invested: invested,
+          myAmounts: myAmounts,
+          onInvest: _invest,
+          onWithdraw: _withdraw,
+        ),
+      );
+    }
 
     return Scaffold(
       backgroundColor: AppColors.bg100,
@@ -108,16 +179,10 @@ class _MamPammScreenState extends State<MamPammScreen> with SingleTickerProvider
       body: TabBarView(
         controller: _tab,
         children: [
-          _FundsList(
-            funds: _funds,
-            invested: _invested,
-            myAmounts: _myAmounts,
-            onInvest: _invest,
-            onWithdraw: _withdraw,
-          ),
+          fundsTab,
           _MyInvestments(
             funds: investedFunds,
-            myAmounts: _myAmounts,
+            myAmounts: myAmounts,
             totalInvested: totalInvested,
             onWithdraw: _withdraw,
           ),

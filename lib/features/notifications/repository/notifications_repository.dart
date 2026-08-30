@@ -53,20 +53,22 @@ class NotificationsRepository {
 
   Future<void> markRead(String id) async {
     try {
-      await _api.patch('/notifications/$id/read');
+      await _api.put('/notifications/$id/read');
     } catch (_) {}
   }
 
   Future<void> markAllRead() async {
     try {
-      await _api.post('/notifications/read-all');
+      await _api.put('/notifications/read-all');
     } catch (_) {}
   }
 
   Future<int> getUnreadCount() async {
     try {
-      final res = await _api.get('/notifications/unread-count');
-      return (res.data['count'] as int? ?? 0);
+      final res = await _api.get('/notifications/unread');
+      // v7 envelope: {data: {unreadCount: n}}
+      final d = res.data?['data'];
+      return ((d is Map ? d['unreadCount'] : res.data?['count']) as num? ?? 0).toInt();
     } catch (_) {
       return 0;
     }

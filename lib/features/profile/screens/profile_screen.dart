@@ -10,6 +10,7 @@ import '../../finance/repository/finance_repository.dart';
 import '../../funds/screens/funds_screen.dart';
 import '../../notifications/screens/notifications_screen.dart';
 import '../../wallet_verification/screens/wallet_verification_screen.dart';
+import '../../settings/screens/settings_screen.dart';
 import '../../../core/network/api_exception.dart';
 
 /// V2 profile — avatar header with UID + status chips, grouped row cards,
@@ -145,11 +146,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
         backgroundColor: AppColors.bg100,
         foregroundColor: AppColors.textPrimary,
         elevation: 0,
-        actions: const [
-          Padding(
-            padding: EdgeInsets.only(right: 14),
+        actions: [
+          const Padding(
+            padding: EdgeInsets.only(right: 4),
             child: Icon(Icons.headset_mic_rounded, size: 23),
           ),
+          IconButton(
+            onPressed: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const SettingsScreen())),
+            icon: const Icon(Icons.settings_rounded, size: 23),
+          ),
+          const SizedBox(width: 6),
         ],
       ),
       body: ListView(

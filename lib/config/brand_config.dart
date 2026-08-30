@@ -101,12 +101,12 @@ class BrandConfig {
         error: const Color(0xFFE53935),
         onPrimary: Colors.white,
         onSecondary: Colors.white,
-        onSurface: const Color(0xFF1A1033),
+        onSurface: const Color(0xFF111214),
       ),
       fontFamily: fontFamily,
       appBarTheme: AppBarTheme(
         backgroundColor: Colors.white,
-        foregroundColor: const Color(0xFF1A1033),
+        foregroundColor: const Color(0xFF111214),
         elevation: 0,
         centerTitle: true,
         surfaceTintColor: Colors.transparent,
@@ -130,7 +130,7 @@ class BrandConfig {
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: const Color(0xFFF8F7FF),
+        fillColor: const Color(0xFFF3F4F6),
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12),
             borderSide: const BorderSide(color: Color(0xFFE5E0F5))),
@@ -143,15 +143,15 @@ class BrandConfig {
       ),
       tabBarTheme: TabBarThemeData(
         labelColor: primaryColor,
-        unselectedLabelColor: const Color(0xFF8E82B0),
+        unselectedLabelColor: const Color(0xFF9CA0A6),
         indicatorColor: primaryColor,
-        dividerColor: const Color(0xFFE5E0F5),
+        dividerColor: const Color(0xFFECECEF),
       ),
       switchTheme: SwitchThemeData(
         thumbColor: WidgetStateProperty.resolveWith(
-            (s) => s.contains(WidgetState.selected) ? primaryColor : const Color(0xFF8E82B0)),
+            (s) => s.contains(WidgetState.selected) ? primaryColor : const Color(0xFF9CA0A6)),
         trackColor: WidgetStateProperty.resolveWith(
-            (s) => s.contains(WidgetState.selected) ? primaryLighterColor : const Color(0xFFEDE9FE)),
+            (s) => s.contains(WidgetState.selected) ? primaryLighterColor : const Color(0xFFEDEDF0)),
       ),
       dividerTheme: const DividerThemeData(color: Color(0xFFE5E0F5), thickness: 1),
       bottomSheetTheme: const BottomSheetThemeData(

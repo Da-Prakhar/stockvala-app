@@ -629,20 +629,36 @@ class _StatusRow extends StatelessWidget {
 // Helpers
 AppBar _kycAppBar(String title, int step, int total) {
   return AppBar(
-    title: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(title, style: AppTextStyles.headingSmall),
-        Text('Step $step of $total', style: AppTextStyles.caption),
-      ],
-    ),
+    backgroundColor: AppColors.bg100,
+    foregroundColor: AppColors.textPrimary,
+    elevation: 0,
+    centerTitle: true,
+    title: Text(title,
+        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800,
+            color: AppColors.textPrimary)),
+    actions: const [
+      Padding(
+        padding: EdgeInsets.only(right: 14),
+        child: Icon(Icons.headset_mic_rounded, size: 23),
+      ),
+    ],
     bottom: PreferredSize(
-      preferredSize: const Size.fromHeight(4),
-      child: LinearProgressIndicator(
-        value: step / total,
-        backgroundColor: AppColors.bg400,
-        valueColor: const AlwaysStoppedAnimation(AppColors.primary),
-        minHeight: 3,
+      preferredSize: const Size.fromHeight(14),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 2, 24, 8),
+        child: Row(children: [
+          for (var i = 1; i <= total; i++)
+            Expanded(
+              child: Container(
+                height: 4,
+                margin: EdgeInsets.only(right: i < total ? 8 : 0),
+                decoration: BoxDecoration(
+                  color: i <= step ? AppColors.textPrimary : AppColors.bg400,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+        ]),
       ),
     ),
   );
@@ -656,31 +672,20 @@ class _KycHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            gradient: AppColors.primaryGradient,
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: Icon(icon, color: Colors.white, size: 28),
-        ),
-        const SizedBox(width: 16),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: AppTextStyles.headingMedium),
-              Text(subtitle, style: AppTextStyles.bodySmall),
-            ],
-          ),
-        ),
+        Text(title,
+            style: const TextStyle(fontSize: 28, height: 1.15,
+                fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+        const SizedBox(height: 8),
+        Text(subtitle,
+            style: const TextStyle(fontSize: 14.5, height: 1.35,
+                color: AppColors.textMuted)),
       ],
     );
   }
 }
-
 class _UploadBox extends StatelessWidget {
   final String label;
   final bool uploaded;

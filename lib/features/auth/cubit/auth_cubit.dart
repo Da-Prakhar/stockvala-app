@@ -1,7 +1,9 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../models/auth_models.dart';
 import '../repository/auth_repository.dart';
 import '../../../core/providers/mt5_account_store.dart';
+import '../../../core/network/websocket_service.dart';
 
 // ── State ────────────────────────────────────────────────────────────────────
 abstract class AuthState {}
@@ -36,11 +38,19 @@ class AuthCubit extends Cubit<AuthState> {
 
   final _repo = AuthRepository.instance;
 
+  /// Debug-only auto-login for simulator/emulator test runs:
+  ///   flutter run --dart-define=DEV_AUTOLOGIN=email:password
+  /// Ignored entirely in release builds.
+  static const _devAutologin = String.fromEnvironment('DEV_AUTOLOGIN');
+
   // ── Internal helper: emit authenticated + load real MT5 accounts ─────────
   void _onAuthenticated(AppUser user) {
     emit(AuthAuthenticated(user));
     // Load real accounts from backend now that auth token is available
     Mt5AccountStore.instance.loadAccounts();
+    // Rebuild the price socket with the fresh token — the pre-auth socket was
+    // rejected by the server (Token missing) and would never recover on its own.
+    WebSocketService.instance.reconnectWithAuth();
   }
 
   // Called on app start — check for saved session
@@ -61,6 +71,14 @@ class AuthCubit extends Cubit<AuthState> {
           emit(AuthUnauthenticated());
         }
       } else {
+        if (kDebugMode && _devAutologin.contains(':')) {
+          final i = _devAutologin.indexOf(':');
+          await login(
+            email: _devAutologin.substring(0, i),
+            password: _devAutologin.substring(i + 1),
+          );
+          return;
+        }
         emit(AuthUnauthenticated());
       }
     } catch (_) {

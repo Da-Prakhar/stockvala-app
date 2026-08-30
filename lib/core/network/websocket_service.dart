@@ -234,6 +234,17 @@ class WebSocketService extends ChangeNotifier {
     _startFlushLoop();
   }
 
+  /// Tear down any existing socket and reconnect reading the CURRENT token.
+  /// Needed after login: connect() may have run pre-auth with an empty token,
+  /// which the server rejects — and the connect() guard would otherwise keep
+  /// that dead socket forever.
+  Future<void> reconnectWithAuth() async {
+    final resubscribe = Set<String>.from(_subscriptions);
+    disconnect();
+    _subscriptions.addAll(resubscribe);
+    await connect();
+  }
+
   // ── Connect using Socket.IO ──────────────────────────────────────────────────
   Future<void> connect() async {
     // Guard: if a socket object already exists (connected OR still connecting),

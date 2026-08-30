@@ -1,15 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import '../../../core/theme/app_colors.dart';
-import '../../../core/theme/app_text_styles.dart';
 import '../../../core/constants/app_routes.dart';
-import '../../../core/services/biometric_service.dart';
-import '../../../shared/widgets/app_button.dart';
-import '../../../shared/widgets/app_input.dart';
-import '../repository/auth_repository.dart';
+import '../../../core/theme/app_colors.dart';
+import '../../../shared/widgets/vantage.dart';
 import '../cubit/auth_cubit.dart';
 
+/// V2 login — clean light layout: big title, Email tab, gray inputs, orange CTA.
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
   @override
@@ -20,7 +16,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _emailCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
-  bool _biometricLoading = false;
+  bool _obscure = true;
   String? _errorMsg;
 
   @override
@@ -34,10 +30,23 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _errorMsg = null);
     if (!_formKey.currentState!.validate()) return;
     context.read<AuthCubit>().login(
-      email: _emailCtrl.text.trim(),
-      password: _passCtrl.text,
-    );
+          email: _emailCtrl.text.trim(),
+          password: _passCtrl.text,
+        );
   }
+
+  InputDecoration _dec(String hint, {Widget? suffix}) => InputDecoration(
+        hintText: hint,
+        hintStyle: const TextStyle(color: AppColors.textMuted, fontSize: 16),
+        filled: true,
+        fillColor: AppColors.bg300,
+        suffixIcon: suffix,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide.none,
+        ),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -55,206 +64,130 @@ class _LoginScreenState extends State<LoginScreen> {
         final isLoading = state is AuthLoading;
         return Scaffold(
           backgroundColor: AppColors.bg100,
-          body: Stack(children: [
-            // Decorative glow
-            Positioned(
-              top: -120, left: -60,
-              child: Container(
-                width: 300, height: 300,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(colors: [
-                    AppColors.primary.withValues(alpha: 0.1), Colors.transparent
+          body: SafeArea(
+            child: Form(
+              key: _formKey,
+              child: ListView(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                children: [
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    if (Navigator.canPop(context))
+                      IconButton(
+                        padding: EdgeInsets.zero,
+                        alignment: Alignment.centerLeft,
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.arrow_back_ios_new_rounded,
+                            color: AppColors.textPrimary, size: 22),
+                      ),
+                    const Spacer(),
+                    const Icon(Icons.headset_mic_rounded,
+                        color: AppColors.textPrimary, size: 24),
                   ]),
-                ),
-              ),
-            ),
-            Positioned(
-              bottom: -80, right: -40,
-              child: Container(
-                width: 200, height: 200,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(colors: [
-                    AppColors.primaryLight.withValues(alpha: 0.08), Colors.transparent
-                  ]),
-                ),
-              ),
-            ),
-
-            SafeArea(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(24),
-                child: Form(
-                  key: _formKey,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const SizedBox(height: 40),
-
-                      // Logo
-                      Row(children: [
-                        Container(
-                          width: 44, height: 44,
-                          decoration: BoxDecoration(
-                            gradient: AppColors.primaryGradient,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Icon(Icons.candlestick_chart_rounded, color: Colors.white, size: 24),
-                        ),
-                        const SizedBox(width: 10),
-                        Text('StockVala', style: AppTextStyles.headingMedium.copyWith(color: AppColors.primary)),
-                      ]).animate().fadeIn(),
-
-                      const SizedBox(height: 48),
-                      Text('Welcome Back', style: AppTextStyles.displayMedium).animate().fadeIn(delay: 80.ms),
-                      const SizedBox(height: 6),
-                      Text('Sign in to continue trading', style: AppTextStyles.bodyMedium).animate().fadeIn(delay: 120.ms),
-
-                      // Error banner
-                      if (_errorMsg != null) ...[
-                        const SizedBox(height: 16),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                          decoration: BoxDecoration(
-                            color: AppColors.errorBg,
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
-                          ),
-                          child: Row(children: [
-                            const Icon(Icons.error_outline_rounded, color: AppColors.error, size: 16),
-                            const SizedBox(width: 8),
-                            Expanded(child: Text(_errorMsg!, style: const TextStyle(
-                                fontSize: 13, color: AppColors.error, fontWeight: FontWeight.w500))),
-                            GestureDetector(
-                              onTap: () {
-                                setState(() => _errorMsg = null);
-                                context.read<AuthCubit>().clearError();
-                              },
-                              child: const Icon(Icons.close_rounded, color: AppColors.error, size: 16),
-                            ),
-                          ]),
-                        ).animate().fadeIn().shakeX(),
-                      ],
-
-                      const SizedBox(height: 32),
-
-                      AppInput(
-                        label: 'Email Address',
-                        hint: 'john@example.com',
-                        controller: _emailCtrl,
-                        keyboardType: TextInputType.emailAddress,
-                        prefixIcon: const Icon(Icons.email_outlined, color: AppColors.textMuted, size: 20),
-                        validator: (v) {
-                          if (v == null || v.isEmpty) return 'Email is required';
-                          if (!v.contains('@')) return 'Enter a valid email';
-                          return null;
-                        },
-                      ).animate().fadeIn(delay: 160.ms),
-
-                      const SizedBox(height: 16),
-
-                      AppInput(
-                        label: 'Password',
-                        hint: '••••••••',
-                        controller: _passCtrl,
-                        obscureText: true,
-                        textInputAction: TextInputAction.done,
-                        prefixIcon: const Icon(Icons.lock_outline, color: AppColors.textMuted, size: 20),
-                        validator: (v) => (v == null || v.isEmpty) ? 'Password is required' : null,
-                        onFieldSubmitted: (_) => _submit(),
-                      ).animate().fadeIn(delay: 200.ms),
-
-                      const SizedBox(height: 8),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: TextButton(
-                          onPressed: () => Navigator.pushNamed(context, AppRoutes.forgotPassword),
-                          child: Text('Forgot Password?',
-                              style: AppTextStyles.labelMedium.copyWith(color: AppColors.primary)),
-                        ),
-                      ).animate().fadeIn(delay: 240.ms),
-
-                      const SizedBox(height: 20),
-
-                      AppButton(
-                        label: 'Sign In',
-                        isLoading: isLoading,
-                        onPressed: isLoading ? null : _submit,
-                      ).animate().fadeIn(delay: 280.ms),
-
-                      const SizedBox(height: 24),
-
-                      // Biometric button
-                      Center(
-                        child: Column(children: [
-                          GestureDetector(
-                            onTap: _biometricLogin,
-                            child: AnimatedContainer(
-                              duration: 200.ms,
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: _biometricLoading ? AppColors.primaryLighter : AppColors.bg300,
-                                shape: BoxShape.circle,
-                                border: Border.all(color: AppColors.border),
-                              ),
-                              child: _biometricLoading
-                                  ? const SizedBox(
-                                      width: 32, height: 32,
-                                      child: CircularProgressIndicator(strokeWidth: 2.5, color: AppColors.primary),
-                                    )
-                                  : const Icon(Icons.fingerprint_rounded, color: AppColors.primary, size: 32),
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          const Text('Use Biometrics', style: AppTextStyles.bodySmall),
-                        ]),
-                      ).animate().fadeIn(delay: 320.ms),
-
-                      const SizedBox(height: 40),
-                      Center(
-                        child: TextButton(
-                          onPressed: () => Navigator.pushReplacementNamed(context, AppRoutes.register),
-                          child: RichText(
-                            text: TextSpan(style: AppTextStyles.bodyMedium, children: [
-                              const TextSpan(text: "Don't have an account? "),
-                              TextSpan(
-                                text: 'Sign Up',
-                                style: AppTextStyles.bodyMedium.copyWith(
-                                    color: AppColors.primary, fontWeight: FontWeight.w700),
-                              ),
-                            ]),
-                          ),
-                        ),
-                      ).animate().fadeIn(delay: 360.ms),
-                    ],
+                  const SizedBox(height: 34),
+                  const Text('Log In',
+                      style: TextStyle(fontSize: 34, fontWeight: FontWeight.w800,
+                          color: AppColors.textPrimary)),
+                  const SizedBox(height: 34),
+                  const _EmailTab(),
+                  const SizedBox(height: 22),
+                  TextFormField(
+                    controller: _emailCtrl,
+                    keyboardType: TextInputType.emailAddress,
+                    autocorrect: false,
+                    style: const TextStyle(fontSize: 16, color: AppColors.textPrimary),
+                    decoration: _dec('Email'),
+                    validator: (v) =>
+                        v == null || !v.contains('@') ? 'Enter a valid email' : null,
                   ),
-                ),
+                  const SizedBox(height: 14),
+                  TextFormField(
+                    controller: _passCtrl,
+                    obscureText: _obscure,
+                    style: const TextStyle(fontSize: 16, color: AppColors.textPrimary),
+                    decoration: _dec('Password 8-16 characters',
+                        suffix: IconButton(
+                          onPressed: () => setState(() => _obscure = !_obscure),
+                          icon: Icon(
+                              _obscure
+                                  ? Icons.visibility_off_outlined
+                                  : Icons.visibility_outlined,
+                              size: 20, color: AppColors.textMuted),
+                        )),
+                    validator: (v) =>
+                        v == null || v.length < 6 ? 'Password too short' : null,
+                  ),
+                  const SizedBox(height: 14),
+                  GestureDetector(
+                    onTap: () =>
+                        Navigator.pushNamed(context, AppRoutes.forgotPassword),
+                    child: const Text('Forgot Password?',
+                        style: TextStyle(fontSize: 14.5,
+                            color: AppColors.textSecondary,
+                            decoration: TextDecoration.underline,
+                            decorationStyle: TextDecorationStyle.dashed,
+                            decorationColor: AppColors.textDisabled)),
+                  ),
+                  if (_errorMsg != null) ...[
+                    const SizedBox(height: 14),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppColors.errorBg,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(_errorMsg!,
+                          style: const TextStyle(
+                              fontSize: 13.5, color: AppColors.error)),
+                    ),
+                  ],
+                  const SizedBox(height: 26),
+                  VPill(label: 'Log In', loading: isLoading, onPressed: _submit),
+                  const SizedBox(height: 16),
+                  Center(
+                    child: GestureDetector(
+                      onTap: () =>
+                          Navigator.pushReplacementNamed(context, AppRoutes.register),
+                      child: RichText(
+                        text: const TextSpan(
+                          text: 'New user? ',
+                          style: TextStyle(fontSize: 15, color: AppColors.textSecondary),
+                          children: [
+                            TextSpan(
+                                text: 'Sign Up',
+                                style: TextStyle(color: AppColors.primary,
+                                    fontWeight: FontWeight.w700)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-          ]),
+          ),
         );
       },
     );
   }
+}
 
-  Future<void> _biometricLogin() async {
-    final hasSaved = await AuthRepository.instance.hasSavedSession();
-    if (!hasSaved) {
-      setState(() => _errorMsg = 'No saved session. Please log in with credentials first.');
-      return;
-    }
-    setState(() => _biometricLoading = true);
-    try {
-      final authed = await BiometricService.authenticate();
-      if (!mounted) return;
-      if (authed) {
-        Navigator.pushReplacementNamed(context, AppRoutes.pinLogin);
-      } else {
-        setState(() { _biometricLoading = false; _errorMsg = 'Biometric authentication failed.'; });
-      }
-    } catch (_) {
-      if (mounted) setState(() => _biometricLoading = false);
-    }
-  }
+class _EmailTab extends StatelessWidget {
+  const _EmailTab();
+  @override
+  Widget build(BuildContext context) => const Row(children: [
+        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Email',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800,
+                  color: AppColors.textPrimary)),
+          SizedBox(height: 6),
+          SizedBox(
+            width: 30,
+            child: DecoratedBox(
+              decoration: BoxDecoration(color: AppColors.textPrimary),
+              child: SizedBox(height: 3),
+            ),
+          ),
+        ]),
+      ]);
 }

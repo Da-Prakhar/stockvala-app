@@ -201,22 +201,22 @@ class _CTHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: const BoxDecoration(gradient: AppColors.primaryGradient),
+      color: AppColors.bg100,
       child: SafeArea(
         bottom: false,
         child: Column(children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
             child: Row(children: [
-              const Text('Copy Trading', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
+              const Text('Copy Trading', style: TextStyle(color: AppColors.textPrimary, fontSize: 22, fontWeight: FontWeight.w800)),
               const Spacer(),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(color: Colors.white.withValues(alpha:0.2), borderRadius: BorderRadius.circular(20)),
+                decoration: BoxDecoration(color: AppColors.bg300, borderRadius: BorderRadius.circular(20)),
                 child: const Row(children: [
-                  Icon(Icons.tune_rounded, color: Colors.white, size: 16),
+                  Icon(Icons.tune_rounded, color: AppColors.textPrimary, size: 16),
                   SizedBox(width: 4),
-                  Text('Filter', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+                  Text('Filter', style: TextStyle(color: AppColors.textPrimary, fontSize: 12, fontWeight: FontWeight.w600)),
                 ]),
               ),
             ]),
@@ -224,12 +224,14 @@ class _CTHeader extends StatelessWidget {
           const SizedBox(height: 12),
           TabBar(
             controller: tab,
-            indicatorColor: Colors.white,
+            indicatorColor: AppColors.textPrimary,
             indicatorWeight: 3,
-            labelColor: Colors.white,
-            unselectedLabelColor: Colors.white60,
-            labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
-            tabs: const [Tab(text: 'Top Traders'), Tab(text: 'Copying'), Tab(text: 'My Signals')],
+            indicatorSize: TabBarIndicatorSize.label,
+            labelColor: AppColors.textPrimary,
+            unselectedLabelColor: AppColors.textMuted,
+            dividerColor: AppColors.borderLight,
+            labelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
+            tabs: const [Tab(text: 'Discover'), Tab(text: 'Copying'), Tab(text: 'My Signals')],
           ),
         ]),
       ),

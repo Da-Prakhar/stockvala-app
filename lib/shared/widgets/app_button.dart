@@ -32,7 +32,7 @@ class AppButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return SizedBox(
       width: isFullWidth ? double.infinity : null,
-      height: height ?? 54,
+      height: height ?? 56,
       child: _buildButton(),
     );
   }
@@ -136,7 +136,7 @@ class _GradientButton extends StatelessWidget {
         gradient: onPressed == null
             ? LinearGradient(colors: [Colors.grey.shade700, Colors.grey.shade800])
             : gradient,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(28),
         boxShadow: onPressed == null
             ? []
             : [
@@ -152,7 +152,7 @@ class _GradientButton extends StatelessWidget {
         style: ElevatedButton.styleFrom(
           backgroundColor: Colors.transparent,
           shadowColor: Colors.transparent,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
         ),
         child: isLoading
             ? const SizedBox(

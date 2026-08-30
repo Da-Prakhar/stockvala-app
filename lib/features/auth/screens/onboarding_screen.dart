@@ -1,188 +1,143 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter_animate/flutter_animate.dart';
-import '../../../core/theme/app_colors.dart';
-import '../../../core/theme/app_text_styles.dart';
 import '../../../core/constants/app_routes.dart';
-import '../../../core/storage/secure_storage.dart';
-import '../../../shared/widgets/app_button.dart';
+import '../../../core/theme/app_colors.dart';
+import '../../../config/app_config.dart';
 
+/// V2 onboarding — black stage, segmented progress, bold headline,
+/// emoji hero art, orange Get Started pill.
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
-
   @override
   State<OnboardingScreen> createState() => _OnboardingScreenState();
 }
 
-class _OnboardingScreenState extends State<OnboardingScreen> {
-  final PageController _controller = PageController();
-  int _currentPage = 0;
+class _OnboardPage {
+  final String headline;
+  final String hero;      // big emoji composition
+  final String heroSub;   // small floating emojis
+  const _OnboardPage(this.headline, this.hero, this.heroSub);
+}
 
-  final List<_OnboardPage> _pages = [
-    _OnboardPage(
-      icon: Icons.candlestick_chart_rounded,
-      gradient: AppColors.primaryGradient,
-      title: 'Trade Global\nMarkets',
-      subtitle: 'Access Forex, Commodities, Indices & Crypto.\nAll powered by MT5.',
-    ),
-    _OnboardPage(
-      icon: Icons.people_alt_rounded,
-      gradient: AppColors.accentGradient,
-      title: 'Copy Expert\nTraders',
-      subtitle: 'Follow top signal providers and auto-copy\ntheir trades in real-time.',
-    ),
-    _OnboardPage(
-      icon: Icons.account_balance_rounded,
-      gradient: AppColors.goldGradient,
-      title: 'Invest in\nMAM & PAMM',
-      subtitle: 'Let professionals manage your money and\nearn returns while you sleep.',
-    ),
-    _OnboardPage(
-      icon: Icons.shield_rounded,
-      gradient: const LinearGradient(
-        colors: [Color(0xFF7C3AED), Color(0xFF5B21B6)],
-      ),
-      title: 'Secure &\nCompliant',
-      subtitle: 'Face ID, PIN lock, 2FA, KYC-verified accounts.\nYour funds are always protected.',
-    ),
+class _OnboardingScreenState extends State<OnboardingScreen> {
+  int _page = 0;
+  Timer? _auto;
+
+  static const _pages = [
+    _OnboardPage('Your Trusted Broker — Chosen by Traders', '🪙', '💠  ₿  🍏'),
+    _OnboardPage('Ultra-Fast Execution — Trade in Milliseconds', '⚡', '📈  💹  🔥'),
+    _OnboardPage('Real-Time Global Markets — Act Before the Crowd', '🌐', '🕐  💵  📊'),
+    _OnboardPage('All-in-One Financial Ecosystem — Capital Redefined', '📈', '🥇  🪙  💰'),
   ];
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.bg100,
-      body: Stack(
-        children: [
-          PageView.builder(
-            controller: _controller,
-            onPageChanged: (i) => setState(() => _currentPage = i),
-            itemCount: _pages.length,
-            itemBuilder: (_, i) => _OnboardPageView(page: _pages[i]),
-          ),
-          Positioned(
-            top: 56,
-            right: 24,
-            child: _currentPage < _pages.length - 1
-                ? TextButton(
-                    onPressed: _finish,
-                    child: Text('Skip', style: AppTextStyles.labelLarge.copyWith(color: AppColors.textMuted)),
-                  )
-                : const SizedBox(),
-          ),
-          Positioned(
-            bottom: 0,
-            left: 0,
-            right: 0,
-            child: Container(
-              padding: const EdgeInsets.fromLTRB(24, 32, 24, 48),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Colors.transparent, AppColors.bg100.withOpacity(0.98)],
-                ),
-              ),
-              child: Column(
-                children: [
-                  // Dots
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: List.generate(
-                      _pages.length,
-                      (i) => AnimatedContainer(
-                        duration: 300.ms,
-                        margin: const EdgeInsets.symmetric(horizontal: 4),
-                        width: _currentPage == i ? 24 : 6,
-                        height: 6,
-                        decoration: BoxDecoration(
-                          color: _currentPage == i ? AppColors.primary : AppColors.textMuted,
-                          borderRadius: BorderRadius.circular(3),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 32),
-                  if (_currentPage == _pages.length - 1) ...[
-                    AppButton(label: 'Get Started', onPressed: _finish),
-                    const SizedBox(height: 12),
-                    AppButton(
-                      label: 'I already have an account',
-                      variant: ButtonVariant.ghost,
-                      onPressed: () => Navigator.pushReplacementNamed(context, AppRoutes.login),
-                    ),
-                  ] else
-                    AppButton(
-                      label: 'Next',
-                      onPressed: () => _controller.nextPage(
-                        duration: 400.ms,
-                        curve: Curves.easeInOut,
-                      ),
-                      suffixIcon: Icons.arrow_forward_rounded,
-                    ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
+  void initState() {
+    super.initState();
+    _auto = Timer.periodic(const Duration(seconds: 3), (_) {
+      if (mounted) setState(() => _page = (_page + 1) % _pages.length);
+    });
   }
 
-  Future<void> _finish() async {
-    await SecureStorage().setBool('onboarding_done', true);
-    if (!mounted) return;
-    Navigator.pushReplacementNamed(context, AppRoutes.register);
+  @override
+  void dispose() {
+    _auto?.cancel();
+    super.dispose();
   }
-}
-
-class _OnboardPageView extends StatelessWidget {
-  final _OnboardPage page;
-  const _OnboardPageView({required this.page});
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(32, 100, 32, 220),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(
-            width: 120,
-            height: 120,
-            decoration: BoxDecoration(
-              gradient: page.gradient,
-              borderRadius: BorderRadius.circular(32),
-              boxShadow: [
-                BoxShadow(
-                  color: (page.gradient as LinearGradient).colors.first.withOpacity(0.35),
-                  blurRadius: 40,
-                  spreadRadius: 5,
+    final p = _pages[_page];
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const SizedBox(height: 18),
+            // segmented progress
+            Row(children: [
+              for (var i = 0; i < _pages.length; i++)
+                Expanded(
+                  child: Container(
+                    height: 4,
+                    margin: EdgeInsets.only(right: i < _pages.length - 1 ? 8 : 0),
+                    decoration: BoxDecoration(
+                      color: i == _page ? Colors.white : const Color(0xFF2A2A2E),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
                 ),
-              ],
+            ]),
+            const SizedBox(height: 22),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 350),
+              child: Text(p.headline,
+                  key: ValueKey(_page),
+                  style: const TextStyle(fontSize: 28, height: 1.22,
+                      fontWeight: FontWeight.w800, color: Colors.white)),
             ),
-            child: Icon(page.icon, color: Colors.white, size: 60),
-          ).animate().scale(duration: 600.ms, curve: Curves.elasticOut),
-          const SizedBox(height: 48),
-          Text(
-            page.title,
-            style: AppTextStyles.displayMedium,
-            textAlign: TextAlign.center,
-          ).animate().fadeIn(delay: 200.ms).slideY(begin: 0.3, end: 0),
-          const SizedBox(height: 16),
-          Text(
-            page.subtitle,
-            style: AppTextStyles.bodyMedium,
-            textAlign: TextAlign.center,
-          ).animate().fadeIn(delay: 350.ms).slideY(begin: 0.3, end: 0),
-        ],
+            const Spacer(),
+            // hero art
+            Center(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 450),
+                child: Column(key: ValueKey('h$_page'), children: [
+                  Container(
+                    width: 210, height: 210,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: RadialGradient(colors: [
+                        Color(0x33FF6118), Colors.transparent,
+                      ]),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(p.hero, style: const TextStyle(fontSize: 110)),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(p.heroSub,
+                      style: const TextStyle(fontSize: 26, letterSpacing: 4)),
+                ]),
+              ),
+            ),
+            const Spacer(),
+            Center(
+              child: Text(AppConfig.appName.toUpperCase(),
+                  style: const TextStyle(fontSize: 13, letterSpacing: 5,
+                      fontWeight: FontWeight.w700, color: Color(0xFF6E6E73))),
+            ),
+            const SizedBox(height: 26),
+            SizedBox(
+              width: double.infinity,
+              height: 56,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: AppColors.primary,
+                  borderRadius: BorderRadius.circular(28),
+                ),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(28),
+                  onTap: () => Navigator.pushReplacementNamed(context, AppRoutes.login),
+                  child: const Center(
+                    child: Text('Get Started',
+                        style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700,
+                            color: Colors.white)),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Center(
+              child: TextButton(
+                onPressed: () =>
+                    Navigator.pushReplacementNamed(context, AppRoutes.register),
+                child: const Text('Create Account',
+                    style: TextStyle(fontSize: 15, color: Colors.white70)),
+              ),
+            ),
+            const SizedBox(height: 8),
+          ]),
+        ),
       ),
     );
   }
-}
-
-class _OnboardPage {
-  final IconData icon;
-  final LinearGradient gradient;
-  final String title;
-  final String subtitle;
-  const _OnboardPage({required this.icon, required this.gradient, required this.title, required this.subtitle});
 }

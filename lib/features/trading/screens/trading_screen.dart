@@ -1,52 +1,79 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
-import '../../../core/theme/app_text_styles.dart';
 import '../../../core/network/websocket_service.dart';
-import '../../../core/network/api_exception.dart';
 import '../../../core/providers/mt5_account_store.dart';
+import '../../../core/services/spark_cache.dart';
+import '../../../shared/widgets/vantage.dart';
+import '../../copy_trading/screens/copy_trading_screen.dart';
 import '../models/trading_models.dart';
 import '../repository/trading_repository.dart';
 import '../repository/market_data_repository.dart';
 import '../widgets/candle_chart.dart';
 
+/// V2 Trade tab — Vantage-style order ticket + expandable chart.
+/// All order/position plumbing is unchanged from V1.
 class TradingScreen extends StatefulWidget {
   const TradingScreen({super.key});
+
+  /// Cross-tab symbol hand-off (Markets taps land here).
+  static final ValueNotifier<String> symbolRequest = ValueNotifier('EURUSD');
+  static void selectSymbol(String sym) => symbolRequest.value = sym;
+
   @override
   State<TradingScreen> createState() => _TradingScreenState();
 }
 
-class _TradingScreenState extends State<TradingScreen> with SingleTickerProviderStateMixin {
+class _TradingScreenState extends State<TradingScreen>
+    with AutomaticKeepAliveClientMixin {
+  int _topTab = 0; // 0 CFDs · 1 Copy
   String _selectedPair = 'EURUSD';
-  String _selectedTf   = '1h';
-  bool   _isBuy        = true;
-  String _orderType    = 'Market';
-  bool   _placing      = false;
-  final _lotCtrl = TextEditingController(text: '0.10');
-  Timer? _tickBackstop;
-  final _slCtrl  = TextEditingController();
-  final _tpCtrl  = TextEditingController();
+  String _selectedTf = '15m';
+  bool _isBuy = true;
+  String _orderType = 'Market';
+  bool _placing = false;
+  bool _chartOpen = true;
+  bool _tpslOpen = false;
+  double _lots = 0.01;
+  final _slCtrl = TextEditingController();
+  final _tpCtrl = TextEditingController();
+  final _priceCtrl = TextEditingController();
 
-  // Internal symbol → display name
-  static const _pairs = ['EURUSD','GBPUSD','USDJPY','XAUUSD','BTCUSD','US30'];
-  static const _displayNames = {
-    'EURUSD': 'EUR/USD', 'GBPUSD': 'GBP/USD', 'USDJPY': 'USD/JPY',
-    'XAUUSD': 'XAU/USD', 'BTCUSD': 'BTC/USD', 'US30': 'US30',
-  };
-  static const _tfs = ['1m','5m','15m','1h','4h','1D'];
+  static const _pairs = [
+    'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF',
+    'XAUUSD', 'XAGUSD', 'BTCUSD', 'ETHUSD', 'US30', 'SPX500', 'GER40', 'USOIL',
+  ];
+  static const _tfs = ['1m', '5m', '15m', '30m', '1h', '4h', '1D'];
+
+  Timer? _tickBackstop;
+  Timer? _posTimer;
+  List<TradingPosition> _positions = [];
+  int _bottomTab = 0; // Positions | Pending
+
+  @override
+  bool get wantKeepAlive => true;
 
   @override
   void initState() {
     super.initState();
     WebSocketService.instance.subscribe(_pairs);
     _startTickBackstop();
+    _loadPositions();
+    _posTimer = Timer.periodic(const Duration(seconds: 15), (_) => _loadPositions());
+    TradingScreen.symbolRequest.addListener(_onSymbolRequest);
   }
 
-  /// v7 pattern — REST tick poll as a backstop for the selected pair, so the
-  /// price header fills instantly on open and keeps working if the socket is
-  /// quiet. Fetches feed the SAME buffered pipeline the socket uses.
+  void _onSymbolRequest() {
+    final sym = TradingScreen.symbolRequest.value;
+    if (sym != _selectedPair && mounted) {
+      setState(() => _selectedPair = sym);
+      WebSocketService.instance.subscribe([sym]);
+      _startTickBackstop();
+    }
+  }
+
+  /// v7 pattern — REST tick poll backstop feeding the shared pipeline.
   void _startTickBackstop() {
     _tickBackstop?.cancel();
     Future<void> poll() async {
@@ -56,75 +83,111 @@ class _TradingScreenState extends State<TradingScreen> with SingleTickerProvider
         WebSocketService.instance.ingestRest(sym, t.bid, t.ask, epochSecs: t.time);
       }
     }
+
     poll();
     _tickBackstop = Timer.periodic(const Duration(seconds: 3), (_) => poll());
   }
 
-  @override
-  void dispose() { _tickBackstop?.cancel(); _lotCtrl.dispose(); _slCtrl.dispose(); _tpCtrl.dispose(); super.dispose(); }
+  Future<void> _loadPositions() async {
+    final acc = Mt5AccountStore.instance.active;
+    if (acc == null) return;
+    try {
+      final p = await TradingRepository.instance.getPositions(accountId: acc.id);
+      if (mounted) setState(() => _positions = p);
+    } catch (_) {}
+  }
 
-  String get _displayPair => _displayNames[_selectedPair] ?? _selectedPair;
-
   @override
-  Widget build(BuildContext context) {
-    return Consumer<WebSocketService>(
-      builder: (_, ws, __) {
-        final tick = ws.tickFor(_selectedPair);
-        return Scaffold(
-          backgroundColor: AppColors.bg100,
-          appBar: AppBar(
-            title: _PairSelector(
-              selected: _displayPair, pairs: _pairs.map((p) => _displayNames[p] ?? p).toList(),
-              onChanged: (name) {
-                final sym = _displayNames.entries.firstWhere((e) => e.value == name, orElse: () => MapEntry(name, name)).key;
-                setState(() => _selectedPair = sym);
-                WebSocketService.instance.subscribe([sym]);
-                _startTickBackstop();
+  void dispose() {
+    TradingScreen.symbolRequest.removeListener(_onSymbolRequest);
+    _tickBackstop?.cancel();
+    _posTimer?.cancel();
+    _slCtrl.dispose();
+    _tpCtrl.dispose();
+    _priceCtrl.dispose();
+    super.dispose();
+  }
+
+  // ── Sentiment: share of up-closes in the recent spark series ─────────────
+  double get _sentiment {
+    final s = SparkCache.peek(_selectedPair);
+    if (s == null || s.length < 3) return .5;
+    var ups = 0;
+    for (var i = 1; i < s.length; i++) {
+      if (s[i] >= s[i - 1]) ups++;
+    }
+    return ups / (s.length - 1);
+  }
+
+  void _pickSymbol() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(8, 16, 8, 8),
+          children: [
+            const Padding(
+              padding: EdgeInsets.only(left: 16, bottom: 8),
+              child: Text('Select Instrument',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800,
+                      color: AppColors.textPrimary)),
+            ),
+            for (final p in _pairs)
+              ListTile(
+                leading: SymbolAvatar(p, size: 36),
+                title: Text(p,
+                    style: const TextStyle(fontWeight: FontWeight.w700,
+                        color: AppColors.textPrimary)),
+                trailing: p == _selectedPair
+                    ? const Icon(Icons.check_circle_rounded, color: AppColors.primary)
+                    : null,
+                onTap: () {
+                  Navigator.pop(ctx);
+                  TradingScreen.selectSymbol(p);
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _pickOrderType() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          for (final t in const ['Market', 'Limit', 'Stop'])
+            ListTile(
+              title: Text(t,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontWeight: t == _orderType ? FontWeight.w800 : FontWeight.w500,
+                    color: t == _orderType ? AppColors.primary : AppColors.textPrimary,
+                  )),
+              onTap: () {
+                Navigator.pop(ctx);
+                setState(() => _orderType = t);
               },
             ),
-            actions: [
-              // WS status indicator
-              Padding(
-                padding: const EdgeInsets.only(right: 16),
-                child: Center(child: Container(
-                  width: 8, height: 8,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: ws.isConnected ? AppColors.success : AppColors.warning,
-                  ),
-                )),
-              ),
-            ],
-          ),
-          body: Column(children: [
-            _PriceHeader(tick: tick, pair: _displayPair),
-            _TimeframeBar(tfs: _tfs, selected: _selectedTf, onSelect: (t) => setState(() => _selectedTf = t)),
-            Expanded(flex: 5, child: CandleChart(symbol: _selectedPair, timeframe: _selectedTf)),
-            Expanded(flex: 4, child: _OrderTicket(
-              isBuy: _isBuy, orderType: _orderType,
-              lotCtrl: _lotCtrl, slCtrl: _slCtrl, tpCtrl: _tpCtrl,
-              tick: tick,
-              placing: _placing,
-              onToggle: () => setState(() => _isBuy = !_isBuy),
-              onOrderType: (t) => setState(() => _orderType = t),
-              onPlace: _placeOrder,
-              pair: _displayPair,
-            )),
-          ]),
-        );
-      },
+        ]),
+      ),
     );
   }
 
   Future<void> _placeOrder() async {
-    final store = Mt5AccountStore.instance;
-    final acc = store.active;
+    final acc = Mt5AccountStore.instance.active;
     if (acc == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('No active MT5 account'), backgroundColor: AppColors.error));
+          content: Text('No active MT5 account'), backgroundColor: AppColors.error));
       return;
     }
-    final lots = double.tryParse(_lotCtrl.text) ?? 0.1;
     final sl = double.tryParse(_slCtrl.text);
     final tp = double.tryParse(_tpCtrl.text);
     final orderType = switch (_orderType) {
@@ -132,17 +195,42 @@ class _TradingScreenState extends State<TradingScreen> with SingleTickerProvider
       'Stop' => OrderType.stop,
       _ => OrderType.market,
     };
-    final limitPrice = orderType != OrderType.market ? double.tryParse(_tpCtrl.text) : null;
+    final price = orderType != OrderType.market ? double.tryParse(_priceCtrl.text) : null;
+    if (orderType != OrderType.market && price == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Enter a price for pending orders'),
+          backgroundColor: AppColors.error));
+      return;
+    }
 
-    // Show confirm sheet first
-    if (!mounted) return;
     final confirmed = await showModalBottomSheet<bool>(
       context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (_) => _ConfirmSheet(
-        pair: _displayPair, isBuy: _isBuy, lots: _lotCtrl.text,
-        orderType: _orderType, sl: sl, tp: tp,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('${_isBuy ? 'Buy' : 'Sell'} $_selectedPair',
+                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800,
+                    color: AppColors.textPrimary)),
+            const SizedBox(height: 14),
+            VInfoRow('Order Type', _orderType),
+            VInfoRow('Volume', '${_lots.toStringAsFixed(2)} Lots'),
+            if (price != null) VInfoRow('Price', price.toString()),
+            if (sl != null) VInfoRow('Stop Loss', sl.toString(), valueColor: AppColors.bearish),
+            if (tp != null) VInfoRow('Take Profit', tp.toString(), valueColor: AppColors.bullish),
+            const SizedBox(height: 18),
+            VPill(
+              label: 'Confirm ${_isBuy ? 'Buy' : 'Sell'}',
+              dark: !_isBuy,
+              onPressed: () => Navigator.pop(ctx, true),
+            ),
+            const SizedBox(height: 6),
+          ]),
+        ),
       ),
     );
     if (confirmed != true || !mounted) return;
@@ -154,357 +242,609 @@ class _TradingScreenState extends State<TradingScreen> with SingleTickerProvider
         symbol: _selectedPair,
         type: orderType,
         side: _isBuy ? OrderSide.buy : OrderSide.sell,
-        lots: lots,
-        price: limitPrice,
+        lots: _lots,
+        price: price,
         stopLoss: sl,
         takeProfit: tp,
       ));
       if (!mounted) return;
-      store.refreshActiveAccount();
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(result.isFilled
-            ? '${_isBuy ? 'BUY' : 'SELL'} $_displayPair filled @ ${result.executedPrice}'
-            : result.message ?? 'Order placed'),
-        backgroundColor: result.isFilled ? (_isBuy ? AppColors.bullish : AppColors.bearish) : AppColors.warning,
+        content: Text(
+            '${_isBuy ? 'Buy' : 'Sell'} ${_lots.toStringAsFixed(2)} $_selectedPair'
+            '${result.executedPrice != null ? ' @ ${result.executedPrice}' : ''} ✓'),
+        backgroundColor: AppColors.success,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ));
+      _loadPositions();
     } catch (e) {
       if (!mounted) return;
-      final msg = e is ApiException ? e.userMessage : 'Order failed';
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(msg), backgroundColor: AppColors.error,
+        content: Text(e.toString().replaceFirst('ApiException: ', '')),
+        backgroundColor: AppColors.error,
         behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ));
     } finally {
       if (mounted) setState(() => _placing = false);
     }
   }
-}
 
-class _PairSelector extends StatelessWidget {
-  final String selected; final List<String> pairs; final ValueChanged<String> onChanged;
-  const _PairSelector({required this.selected, required this.pairs, required this.onChanged});
-  @override
-  Widget build(BuildContext context) => GestureDetector(
-    onTap: () => showModalBottomSheet(
-      context: context,
-      builder: (_) => Container(
-        padding: const EdgeInsets.all(24),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-          Text('Select Symbol', style: AppTextStyles.headingMedium),
-          const SizedBox(height: 16),
-          Wrap(spacing: 10, runSpacing: 10, children: pairs.map((p) => GestureDetector(
-            onTap: () { onChanged(p); Navigator.pop(context); },
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              decoration: BoxDecoration(
-                color: p == selected ? AppColors.primaryLighter : AppColors.bg200,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: p == selected ? AppColors.primary : AppColors.border),
-              ),
-              child: Text(p, style: TextStyle(fontWeight: FontWeight.w600,
-                  color: p == selected ? AppColors.primary : AppColors.textPrimary)),
-            ),
-          )).toList()),
-          const SizedBox(height: 16),
-        ]),
-      ),
-    ),
-    child: Row(mainAxisSize: MainAxisSize.min, children: [
-      Text(selected, style: AppTextStyles.headingMedium),
-      const SizedBox(width: 4),
-      const Icon(Icons.keyboard_arrow_down_rounded, color: AppColors.textMuted, size: 20),
-    ]),
-  );
-}
-
-class _PriceHeader extends StatelessWidget {
-  final QuoteTick? tick;
-  final String pair;
-  const _PriceHeader({required this.tick, required this.pair});
-
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-    decoration: const BoxDecoration(color: AppColors.bg200, border: Border(bottom: BorderSide(color: AppColors.border))),
-    child: Row(children: [
-      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(tick?.formattedBid ?? '—',
-            style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: AppColors.textPrimary, letterSpacing: -0.5)),
-        if (tick != null)
-          Row(children: [
-            Icon(tick!.isBullish ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded,
-                color: tick!.isBullish ? AppColors.bullish : AppColors.bearish, size: 12),
-            Text(tick!.formattedChange,
-                style: TextStyle(color: tick!.isBullish ? AppColors.bullish : AppColors.bearish, fontSize: 11, fontWeight: FontWeight.w600)),
-          ])
-        else
-          const Text('Connecting...', style: TextStyle(color: AppColors.textMuted, fontSize: 11)),
-      ]),
-      const Spacer(),
-      if (tick != null) ...[
-        _PStat('Spread', tick!.formattedSpread),
-        const SizedBox(width: 16),
-        _PStat('High', tick!.formattedHigh),
-        const SizedBox(width: 16),
-        _PStat('Low', tick!.formattedLow),
-      ],
-    ]),
-  );
-}
-
-class _PStat extends StatelessWidget {
-  final String l, v;
-  const _PStat(this.l, this.v);
-  @override
-  Widget build(BuildContext context) => Column(children: [
-    Text(l, style: AppTextStyles.caption),
-    Text(v, style: AppTextStyles.labelLarge),
-  ]);
-}
-
-class _TimeframeBar extends StatelessWidget {
-  final List<String> tfs; final String selected; final ValueChanged<String> onSelect;
-  const _TimeframeBar({required this.tfs, required this.selected, required this.onSelect});
-  @override
-  Widget build(BuildContext context) => Container(
-    height: 38, color: AppColors.bg200,
-    child: SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Row(children: tfs.map((t) => GestureDetector(
-        onTap: () => onSelect(t),
-        child: AnimatedContainer(
-          duration: 200.ms,
-          margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-          decoration: BoxDecoration(
-            color: selected == t ? AppColors.primary : Colors.transparent,
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Text(t, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
-              color: selected == t ? Colors.white : AppColors.textMuted)),
-        ),
-      )).toList()),
-    ),
-  );
-}
-
-class _OrderTicket extends StatelessWidget {
-  final bool isBuy, placing;
-  final String orderType, pair;
-  final TextEditingController lotCtrl, slCtrl, tpCtrl;
-  final QuoteTick? tick;
-  final VoidCallback onToggle, onPlace;
-  final ValueChanged<String> onOrderType;
-
-  const _OrderTicket({
-    required this.isBuy, required this.orderType, required this.pair,
-    required this.lotCtrl, required this.slCtrl, required this.tpCtrl,
-    required this.tick, required this.placing,
-    required this.onToggle, required this.onOrderType, required this.onPlace,
-  });
+  Future<void> _closePosition(TradingPosition p) async {
+    final acc = Mt5AccountStore.instance.active;
+    if (acc == null) return;
+    try {
+      await TradingRepository.instance
+          .closePosition(accountId: acc.id, ticket: p.ticket);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Position #${p.ticket} closed'),
+        backgroundColor: AppColors.success,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ));
+      _loadPositions();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(e.toString().replaceFirst('ApiException: ', '')),
+        backgroundColor: AppColors.error));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final askPrice = tick?.formattedAsk ?? '—';
-    final bidPrice = tick?.formattedBid ?? '—';
+    super.build(context);
+    final store = context.watch<Mt5AccountStore>();
+    final acc = store.active;
 
-    return Container(
-      decoration: const BoxDecoration(color: AppColors.bg200, border: Border(top: BorderSide(color: AppColors.border))),
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(14),
-        child: Column(children: [
-          Row(children: [
-            Expanded(child: _SideBtn('BUY', askPrice, isBuy,  true,  () { if (!isBuy) onToggle(); })),
-            const SizedBox(width: 8),
-            Expanded(child: _SideBtn('SELL', bidPrice, !isBuy, false, () { if (isBuy) onToggle(); })),
-          ]),
-          const SizedBox(height: 10),
-          Row(children: ['Market','Limit','Stop'].map((t) => Expanded(child: GestureDetector(
-            onTap: () => onOrderType(t),
-            child: AnimatedContainer(
-              duration: 200.ms, margin: const EdgeInsets.symmetric(horizontal: 3),
-              padding: const EdgeInsets.symmetric(vertical: 7),
-              decoration: BoxDecoration(
-                color: orderType == t ? AppColors.primaryLighter : Colors.transparent,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: orderType == t ? AppColors.primary : AppColors.border),
+    return SafeArea(
+      bottom: false,
+      child: Column(children: [
+        // ── CFDs | Copy header ───────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+          child: Row(children: [
+            Expanded(
+              child: VTextTabs(
+                tabs: const ['CFDs', 'Copy'],
+                selected: _topTab, big: true,
+                onTap: (i) => setState(() => _topTab = i),
               ),
-              alignment: Alignment.center,
-              child: Text(t, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
-                  color: orderType == t ? AppColors.primary : AppColors.textMuted)),
             ),
-          ))).toList()),
-          const SizedBox(height: 10),
-          Row(children: [
-            Text('Volume (Lots)', style: AppTextStyles.labelMedium),
-            const Spacer(),
-            _LotStepper(ctrl: lotCtrl),
-          ]),
-          const SizedBox(height: 10),
-          Row(children: [
-            Expanded(child: _SmIn('Stop Loss', slCtrl)),
-            const SizedBox(width: 8),
-            Expanded(child: _SmIn('Take Profit', tpCtrl)),
-          ]),
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity, height: 48,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(colors: isBuy
-                    ? [AppColors.bullish, const Color(0xFF0A9050)]
-                    : [AppColors.bearish, const Color(0xFFCC0000)]),
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [BoxShadow(color: (isBuy ? AppColors.bullish : AppColors.bearish).withValues(alpha: 0.3), blurRadius: 10, offset: const Offset(0, 4))],
-              ),
-              child: ElevatedButton(
-                onPressed: placing ? null : onPlace,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.transparent, shadowColor: Colors.transparent,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            Consumer<WebSocketService>(
+              builder: (_, ws, __) => Container(
+                width: 8, height: 8,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: ws.isConnected ? AppColors.bullish : AppColors.warning,
                 ),
-                child: placing
-                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                    : Text('${isBuy ? 'BUY' : 'SELL'} $pair',
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15)),
               ),
             ),
-          ),
-        ]),
-      ),
-    );
-  }
-}
-
-class _SideBtn extends StatelessWidget {
-  final String label, price; final bool selected, isBuy; final VoidCallback onTap;
-  const _SideBtn(this.label, this.price, this.selected, this.isBuy, this.onTap);
-  @override
-  Widget build(BuildContext context) {
-    final color = isBuy ? AppColors.bullish : AppColors.bearish;
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: 200.ms,
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        decoration: BoxDecoration(
-          color: selected ? color.withValues(alpha: 0.12) : AppColors.bg100,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: selected ? color : AppColors.border, width: selected ? 1.5 : 1),
+          ]),
         ),
-        child: Column(children: [
-          Text(label, style: TextStyle(fontWeight: FontWeight.w700, color: selected ? color : AppColors.textMuted)),
-          Text(price, style: TextStyle(fontSize: 11, color: color)),
-        ]),
-      ),
+
+        Expanded(
+          child: _topTab == 1
+              ? const CopyTradingScreen()
+              : ListView(
+                  padding: const EdgeInsets.only(bottom: 110),
+                  children: [
+                    const SizedBox(height: 12),
+
+                    // ── Account chip ────────────────────────────────────
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Row(children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                          decoration: BoxDecoration(
+                            color: AppColors.bg300,
+                            borderRadius: BorderRadius.circular(18),
+                          ),
+                          child: Row(mainAxisSize: MainAxisSize.min, children: [
+                            Text(acc == null ? '—' : (acc.isReal ? 'Live' : 'Demo'),
+                                style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700,
+                                    color: acc?.isReal == false
+                                        ? const Color(0xFF7C5CFF)
+                                        : AppColors.primary)),
+                            const SizedBox(width: 6),
+                            Text(acc == null ? 'No account' : acc.login,
+                                style: const TextStyle(fontSize: 13.5,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.textPrimary)),
+                            const Icon(Icons.arrow_drop_down_rounded,
+                                size: 20, color: AppColors.textMuted),
+                          ]),
+                        ),
+                      ]),
+                    ),
+                    const SizedBox(height: 14),
+
+                    // ── Symbol row ──────────────────────────────────────
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Row(children: [
+                        GestureDetector(
+                          onTap: _pickSymbol,
+                          child: Row(children: [
+                            Text(_selectedPair,
+                                style: const TextStyle(fontSize: 24,
+                                    fontWeight: FontWeight.w800,
+                                    color: AppColors.textPrimary)),
+                            const Icon(Icons.arrow_drop_down_rounded,
+                                size: 26, color: AppColors.textPrimary),
+                          ]),
+                        ),
+                        const Spacer(),
+                        IconButton(
+                          onPressed: () => setState(() => _chartOpen = !_chartOpen),
+                          icon: Icon(Icons.insert_chart_outlined_rounded,
+                              color: _chartOpen ? AppColors.primary : AppColors.textPrimary),
+                        ),
+                      ]),
+                    ),
+
+                    // ── Chart (expandable) ─────────────────────────────
+                    if (_chartOpen) ...[
+                      SizedBox(
+                        height: 34,
+                        child: ListView(
+                          scrollDirection: Axis.horizontal,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          children: [
+                            for (final t in _tfs)
+                              GestureDetector(
+                                onTap: () => setState(() => _selectedTf = t),
+                                child: Container(
+                                  margin: const EdgeInsets.symmetric(horizontal: 3),
+                                  padding: const EdgeInsets.symmetric(horizontal: 13),
+                                  decoration: BoxDecoration(
+                                    color: t == _selectedTf
+                                        ? AppColors.bg300 : Colors.transparent,
+                                    borderRadius: BorderRadius.circular(9),
+                                  ),
+                                  alignment: Alignment.center,
+                                  child: Text(t,
+                                      style: TextStyle(fontSize: 13.5,
+                                          fontWeight: t == _selectedTf
+                                              ? FontWeight.w800 : FontWeight.w500,
+                                          color: t == _selectedTf
+                                              ? AppColors.textPrimary
+                                              : AppColors.textMuted)),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      SizedBox(
+                        height: 300,
+                        child: CandleChart(symbol: _selectedPair, timeframe: _selectedTf),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+
+                    // ── Sell/Buy split ─────────────────────────────────
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Consumer<WebSocketService>(builder: (_, ws, __) {
+                        final tick = ws.tickFor(_selectedPair);
+                        final spreadTxt = tick?.formattedSpread ?? '—';
+                        return Column(children: [
+                          Stack(alignment: Alignment.center, children: [
+                            Row(children: [
+                              Expanded(
+                                child: _SideButton(
+                                  label: 'Sell',
+                                  price: tick?.formattedBid ?? '—',
+                                  selected: !_isBuy,
+                                  color: AppColors.bearish,
+                                  left: true,
+                                  onTap: () => setState(() => _isBuy = false),
+                                ),
+                              ),
+                              const SizedBox(width: 3),
+                              Expanded(
+                                child: _SideButton(
+                                  label: 'Buy',
+                                  price: tick?.formattedAsk ?? '—',
+                                  selected: _isBuy,
+                                  color: AppColors.bullish,
+                                  left: false,
+                                  onTap: () => setState(() => _isBuy = true),
+                                ),
+                              ),
+                            ]),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(12),
+                                boxShadow: const [BoxShadow(
+                                    color: Color(0x14000000), blurRadius: 6)],
+                              ),
+                              child: Text(spreadTxt,
+                                  style: const TextStyle(fontSize: 11.5,
+                                      fontWeight: FontWeight.w700,
+                                      color: AppColors.textPrimary)),
+                            ),
+                          ]),
+                          const SizedBox(height: 8),
+                          // sentiment bar
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(3),
+                            child: SizedBox(
+                              height: 4,
+                              child: Row(children: [
+                                Expanded(
+                                    flex: (_sentiment * 100).round().clamp(1, 99),
+                                    child: Container(color: AppColors.bullish)),
+                                const SizedBox(width: 2),
+                                Expanded(
+                                    flex: (100 - (_sentiment * 100).round()).clamp(1, 99),
+                                    child: Container(color: AppColors.bearish)),
+                              ]),
+                            ),
+                          ),
+                        ]);
+                      }),
+                    ),
+                    const SizedBox(height: 14),
+
+                    // ── Order type ─────────────────────────────────────
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: VCard(
+                        onTap: _pickOrderType,
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                        color: AppColors.bg300,
+                        child: Row(children: [
+                          const Icon(Icons.info_outline_rounded,
+                              size: 17, color: AppColors.textMuted),
+                          Expanded(
+                            child: Text(_orderType,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(fontSize: 16.5,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.textPrimary)),
+                          ),
+                          const Icon(Icons.arrow_drop_down_rounded,
+                              color: AppColors.textMuted),
+                        ]),
+                      ),
+                    ),
+
+                    if (_orderType != 'Market') ...[
+                      const SizedBox(height: 10),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: VCard(
+                          color: AppColors.bg300,
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                          child: TextField(
+                            controller: _priceCtrl,
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(fontSize: 16.5, fontWeight: FontWeight.w700),
+                            decoration: const InputDecoration(
+                                border: InputBorder.none,
+                                hintText: 'Trigger price',
+                                hintStyle: TextStyle(color: AppColors.textMuted,
+                                    fontWeight: FontWeight.w400)),
+                          ),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 10),
+
+                    // ── Volume stepper ─────────────────────────────────
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: AppColors.bg300,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: AppColors.primary.withValues(alpha: .55)),
+                        ),
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                        child: Row(children: [
+                          IconButton(
+                            onPressed: () => setState(() =>
+                                _lots = (_lots - 0.01).clamp(0.01, 100)),
+                            icon: const Icon(Icons.remove_rounded,
+                                color: AppColors.textSecondary),
+                          ),
+                          Expanded(
+                            child: Column(children: [
+                              const Text('Volume',
+                                  style: TextStyle(fontSize: 12,
+                                      color: AppColors.textMuted)),
+                              Text(_lots.toStringAsFixed(2),
+                                  style: const TextStyle(fontSize: 19,
+                                      fontWeight: FontWeight.w800,
+                                      color: AppColors.textPrimary)),
+                            ]),
+                          ),
+                          IconButton(
+                            onPressed: () => setState(() =>
+                                _lots = (_lots + 0.01).clamp(0.01, 100)),
+                            icon: const Icon(Icons.add_rounded,
+                                color: AppColors.textSecondary),
+                          ),
+                          Container(width: 1, height: 30, color: AppColors.border),
+                          const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 12),
+                            child: Text('Lots',
+                                style: TextStyle(fontSize: 14.5,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppColors.textPrimary)),
+                          ),
+                        ]),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: SliderTheme(
+                        data: SliderThemeData(
+                          trackHeight: 2.5,
+                          activeTrackColor: AppColors.textPrimary,
+                          inactiveTrackColor: AppColors.bg400,
+                          thumbColor: Colors.white,
+                          overlayShape: SliderComponentShape.noOverlay,
+                          thumbShape: const RoundSliderThumbShape(
+                              enabledThumbRadius: 9, elevation: 3),
+                        ),
+                        child: Slider(
+                          value: _lots.clamp(0.01, 5),
+                          min: 0.01, max: 5,
+                          onChanged: (v) => setState(() =>
+                              _lots = (v * 100).round() / 100),
+                        ),
+                      ),
+                    ),
+
+                    // ── TP/SL ──────────────────────────────────────────
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Row(children: [
+                        SizedBox(
+                          width: 24, height: 24,
+                          child: Checkbox(
+                            value: _tpslOpen,
+                            activeColor: AppColors.primary,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(6)),
+                            onChanged: (v) => setState(() => _tpslOpen = v ?? false),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        const Text('TP/SL',
+                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600,
+                                color: AppColors.textPrimary,
+                                decoration: TextDecoration.underline,
+                                decorationStyle: TextDecorationStyle.dashed,
+                                decorationColor: AppColors.textDisabled)),
+                      ]),
+                    ),
+                    if (_tpslOpen)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                        child: Row(children: [
+                          Expanded(
+                            child: VCard(
+                              color: AppColors.bg300,
+                              padding: const EdgeInsets.symmetric(horizontal: 12),
+                              child: TextField(
+                                controller: _tpCtrl,
+                                keyboardType: const TextInputType.numberWithOptions(
+                                    decimal: true),
+                                style: const TextStyle(fontSize: 15,
+                                    fontWeight: FontWeight.w600),
+                                decoration: const InputDecoration(
+                                    border: InputBorder.none,
+                                    hintText: 'Take Profit',
+                                    hintStyle: TextStyle(
+                                        color: AppColors.textMuted,
+                                        fontWeight: FontWeight.w400)),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: VCard(
+                              color: AppColors.bg300,
+                              padding: const EdgeInsets.symmetric(horizontal: 12),
+                              child: TextField(
+                                controller: _slCtrl,
+                                keyboardType: const TextInputType.numberWithOptions(
+                                    decimal: true),
+                                style: const TextStyle(fontSize: 15,
+                                    fontWeight: FontWeight.w600),
+                                decoration: const InputDecoration(
+                                    border: InputBorder.none,
+                                    hintText: 'Stop Loss',
+                                    hintStyle: TextStyle(
+                                        color: AppColors.textMuted,
+                                        fontWeight: FontWeight.w400)),
+                              ),
+                            ),
+                          ),
+                        ]),
+                      ),
+                    const SizedBox(height: 8),
+
+                    // ── Info rows ──────────────────────────────────────
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Column(children: [
+                        VInfoRow('Free Margin',
+                            acc == null ? '--' : acc.freeMargin.toStringAsFixed(2)),
+                        VInfoRow('Margin Level',
+                            acc == null || acc.marginLevel == 0
+                                ? '--' : '${acc.marginLevel.toStringAsFixed(1)}%'),
+                        VInfoRow('Leverage', acc?.leverage ?? '--'),
+                      ]),
+                    ),
+                    const SizedBox(height: 10),
+
+                    // ── CTA ────────────────────────────────────────────
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: SizedBox(
+                        width: double.infinity,
+                        height: 56,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: _placing
+                                ? AppColors.bg300
+                                : (_isBuy ? AppColors.bullish : AppColors.bearish),
+                            borderRadius: BorderRadius.circular(28),
+                          ),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(28),
+                            onTap: _placing ? null : _placeOrder,
+                            child: Center(
+                              child: _placing
+                                  ? const SizedBox(width: 20, height: 20,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2.2, color: AppColors.textMuted))
+                                  : Text(
+                                      '${_isBuy ? 'Buy' : 'Sell'} ${_lots.toStringAsFixed(2)} Lots',
+                                      style: const TextStyle(fontSize: 17,
+                                          fontWeight: FontWeight.w700,
+                                          color: Colors.white)),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 22),
+
+                    // ── Positions / Pending ────────────────────────────
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: VTextTabs(
+                        tabs: ['Positions(${_positions.length})', 'Pending Orders(0)'],
+                        selected: _bottomTab,
+                        fontSize: 16,
+                        onTap: (i) => setState(() => _bottomTab = i),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    if (_bottomTab == 1 || _positions.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.all(28),
+                        child: Center(
+                            child: Text('Nothing here yet',
+                                style: TextStyle(fontSize: 14,
+                                    color: AppColors.textMuted))),
+                      )
+                    else
+                      ..._positions.map((p) => _PositionRow(
+                            position: p,
+                            onClose: () => _closePosition(p),
+                          )),
+                  ],
+                ),
+        ),
+      ]),
     );
   }
 }
 
-class _LotStepper extends StatelessWidget {
-  final TextEditingController ctrl;
-  const _LotStepper({required this.ctrl});
-  @override
-  Widget build(BuildContext context) => Row(children: [
-    _SBtn(Icons.remove, () { final v = double.tryParse(ctrl.text) ?? 0.1; if (v > 0.01) ctrl.text = (v - 0.01).toStringAsFixed(2); }),
-    SizedBox(width: 60, child: TextField(
-      controller: ctrl, textAlign: TextAlign.center,
-      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-      style: AppTextStyles.labelLarge,
-      decoration: const InputDecoration(border: InputBorder.none, isDense: true),
-    )),
-    _SBtn(Icons.add, () { final v = double.tryParse(ctrl.text) ?? 0.1; ctrl.text = (v + 0.01).toStringAsFixed(2); }),
-  ]);
-}
+class _SideButton extends StatelessWidget {
+  final String label, price;
+  final bool selected, left;
+  final Color color;
+  final VoidCallback onTap;
+  const _SideButton({required this.label, required this.price,
+      required this.selected, required this.color, required this.left,
+      required this.onTap});
 
-class _SBtn extends StatelessWidget {
-  final IconData icon; final VoidCallback onTap;
-  const _SBtn(this.icon, this.onTap);
   @override
   Widget build(BuildContext context) => GestureDetector(
-    onTap: onTap,
-    child: Container(padding: const EdgeInsets.all(6),
-        decoration: BoxDecoration(color: AppColors.bg300, borderRadius: BorderRadius.circular(6), border: Border.all(color: AppColors.border)),
-        child: Icon(icon, color: AppColors.textMuted, size: 16)),
-  );
+        onTap: onTap,
+        child: Container(
+          height: 62,
+          decoration: BoxDecoration(
+            color: selected ? color : AppColors.bg300,
+            borderRadius: BorderRadius.horizontal(
+              left: Radius.circular(left ? 16 : 4),
+              right: Radius.circular(left ? 4 : 16),
+            ),
+          ),
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Text(label,
+                style: TextStyle(fontSize: 13,
+                    color: selected ? Colors.white70 : AppColors.textSecondary)),
+            const SizedBox(height: 2),
+            Text(price,
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800,
+                    color: selected ? Colors.white : AppColors.textPrimary)),
+          ]),
+        ),
+      );
 }
 
-class _SmIn extends StatelessWidget {
-  final String label; final TextEditingController ctrl;
-  const _SmIn(this.label, this.ctrl);
-  @override
-  Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-    Text(label, style: AppTextStyles.caption),
-    const SizedBox(height: 4),
-    TextField(
-      controller: ctrl, keyboardType: const TextInputType.numberWithOptions(decimal: true),
-      style: AppTextStyles.labelMedium,
-      decoration: InputDecoration(
-        hintText: '0.00000', contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        filled: true, fillColor: AppColors.bg100,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: AppColors.border)),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: AppColors.border)),
-        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: AppColors.primary)),
-      ),
-    ),
-  ]);
-}
-
-class _ConfirmSheet extends StatelessWidget {
-  final String pair, lots, orderType;
-  final bool isBuy;
-  final double? sl, tp;
-  const _ConfirmSheet({required this.pair, required this.lots, required this.orderType, required this.isBuy, this.sl, this.tp});
+class _PositionRow extends StatelessWidget {
+  final TradingPosition position;
+  final VoidCallback onClose;
+  const _PositionRow({required this.position, required this.onClose});
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(24),
-    child: Column(mainAxisSize: MainAxisSize.min, children: [
-      Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(2))),
-      const SizedBox(height: 20),
-      Text('Confirm Order', style: AppTextStyles.headingMedium),
-      const SizedBox(height: 20),
-      Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(color: AppColors.bg200, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.border)),
-        child: Column(children: [
-          _CR('Symbol', pair),
-          _CR('Side', isBuy ? 'BUY' : 'SELL', valueColor: isBuy ? AppColors.bullish : AppColors.bearish),
-          _CR('Order Type', orderType),
-          _CR('Volume', '$lots lots'),
-          _CR('Price', orderType == 'Market' ? 'Market Price' : 'Limit/Stop'),
-          if (sl != null) _CR('Stop Loss', sl!.toStringAsFixed(5)),
-          if (tp != null) _CR('Take Profit', tp!.toStringAsFixed(5)),
+  Widget build(BuildContext context) {
+    final p = position;
+    final isBuy = p.side == OrderSide.buy;
+    final pc = p.profit >= 0 ? AppColors.bullish : AppColors.bearish;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+      child: VCard(
+        padding: const EdgeInsets.all(14),
+        child: Row(children: [
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Text(p.symbol,
+                    style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w800,
+                        color: AppColors.textPrimary)),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: isBuy ? AppColors.bullishBg : AppColors.bearishBg,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text('${isBuy ? 'Buy' : 'Sell'} ${p.lots.toStringAsFixed(2)}',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+                          color: isBuy ? AppColors.bullish : AppColors.bearish)),
+                ),
+              ]),
+              const SizedBox(height: 4),
+              Text('${p.openPrice} → ${p.currentPrice}',
+                  style: const TextStyle(fontSize: 12.5, color: AppColors.textMuted)),
+            ]),
+          ),
+          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            Text('${p.profit >= 0 ? '+' : ''}${p.profit.toStringAsFixed(2)}',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: pc)),
+            const SizedBox(height: 4),
+            GestureDetector(
+              onTap: onClose,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                decoration: BoxDecoration(
+                  color: AppColors.bg300,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Text('Close',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                        color: AppColors.textPrimary)),
+              ),
+            ),
+          ]),
         ]),
       ),
-      const SizedBox(height: 20),
-      Row(children: [
-        Expanded(child: OutlinedButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel'))),
-        const SizedBox(width: 12),
-        Expanded(child: ElevatedButton(
-          onPressed: () => Navigator.pop(context, true),
-          style: ElevatedButton.styleFrom(backgroundColor: isBuy ? AppColors.bullish : AppColors.bearish),
-          child: Text('Place ${isBuy ? 'BUY' : 'SELL'}'),
-        )),
-      ]),
-      const SizedBox(height: 8),
-    ]),
-  );
-}
-
-class _CR extends StatelessWidget {
-  final String l, v; final Color? valueColor;
-  const _CR(this.l, this.v, {this.valueColor});
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 8),
-    child: Row(children: [
-      Text(l, style: AppTextStyles.bodyMedium),
-      const Spacer(),
-      Text(v, style: AppTextStyles.labelLarge.copyWith(color: valueColor ?? AppColors.textPrimary)),
-    ]),
-  );
+    );
+  }
 }

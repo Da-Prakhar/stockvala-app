@@ -53,6 +53,11 @@ android {
             applicationId = "com.nexustrade.app"
             resValue("string", "app_name", "NexusTrade")
         }
+        create("rhynofx") {
+            dimension = "brand"
+            applicationId = "com.rhynofx.app"
+            resValue("string", "app_name", "RhynoFX")
+        }
     }
 
     buildTypes {

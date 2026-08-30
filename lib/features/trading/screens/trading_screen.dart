@@ -9,6 +9,7 @@ import '../../../core/providers/mt5_account_store.dart';
 import '../../../core/services/spark_cache.dart';
 import '../../../shared/widgets/vantage.dart';
 import '../../copy_trading/screens/copy_trading_screen.dart';
+import '../../funds/widgets/open_account_sheet.dart';
 import '../models/trading_models.dart';
 import '../repository/trading_repository.dart';
 import '../repository/market_data_repository.dart';
@@ -475,7 +476,9 @@ class _TradingScreenState extends State<TradingScreen>
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       child: Row(children: [
-                        Container(
+                        GestureDetector(
+                          onTap: acc == null ? () => showOpenAccountSheet(context) : null,
+                          child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
                           decoration: BoxDecoration(
                             color: AppColors.bg300,
@@ -496,8 +499,42 @@ class _TradingScreenState extends State<TradingScreen>
                                 size: 20, color: AppColors.textMuted),
                           ]),
                         ),
+                        ),
                       ]),
                     ),
+                    // No trading account yet → make opening one unmissable.
+                    if (acc == null)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                        child: VCard(
+                          color: AppColors.primaryLighter,
+                          padding: const EdgeInsets.all(16),
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Row(children: [
+                                  Text('🚀', style: TextStyle(fontSize: 26)),
+                                  SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text('Start trading in seconds',
+                                        style: TextStyle(fontSize: 17,
+                                            fontWeight: FontWeight.w800,
+                                            color: AppColors.textPrimary)),
+                                  ),
+                                ]),
+                                const SizedBox(height: 4),
+                                const Text(
+                                    'You need a trading account to place orders. '
+                                    'Open one instantly — no paperwork.',
+                                    style: TextStyle(fontSize: 13.5,
+                                        color: AppColors.textSecondary)),
+                                const SizedBox(height: 14),
+                                VPill(
+                                  label: 'Open Trading Account',
+                                  onPressed: () => showOpenAccountSheet(context),
+                                ),
+                              ]),
+                        ),
+                      ),
                     const SizedBox(height: 14),
 
                     // ── Symbol row ──────────────────────────────────────

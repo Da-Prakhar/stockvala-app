@@ -165,7 +165,7 @@ class _CandleChartState extends State<CandleChart> {
     // Feeds can disagree (a stale gateway resolving SYMBOL.# on another
     // server). A quote >3% away from the forming candle is not this chart's
     // feed — folding it in painted kilometre-long wicks.
-    if ((price - last.close).abs() / last.close > 0.03) return;
+    if ((price - last.close).abs() / last.close > 0.01) return;
 
     final tfSecs = _tfSeconds[_mt5Tf] ?? 900;
     final nowSecs = DateTime.now().millisecondsSinceEpoch ~/ 1000;

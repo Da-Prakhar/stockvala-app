@@ -5,6 +5,7 @@ import '../../../core/providers/mt5_account_store.dart';
 import '../../../shared/widgets/vantage.dart';
 import '../../deposit/screens/deposit_screen.dart';
 import '../../finance/repository/finance_repository.dart';
+import '../widgets/open_account_sheet.dart';
 import '../../trading/models/trading_models.dart';
 import '../../trading/repository/trading_repository.dart';
 
@@ -276,10 +277,19 @@ class _FundsScreenState extends State<FundsScreen> with AutomaticKeepAliveClient
               ),
               const SizedBox(height: 6),
               if (accounts.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.all(40),
-                  child: Center(child: Text('No trading accounts yet',
-                      style: TextStyle(fontSize: 14, color: AppColors.textMuted))),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(32, 24, 32, 10),
+                  child: Column(children: [
+                    const Text('💼', style: TextStyle(fontSize: 40)),
+                    const SizedBox(height: 10),
+                    const Text('No trading accounts yet',
+                        style: TextStyle(fontSize: 15, color: AppColors.textMuted)),
+                    const SizedBox(height: 16),
+                    VPill(
+                      label: 'Open Trading Account',
+                      onPressed: () => showOpenAccountSheet(context),
+                    ),
+                  ]),
                 )
               else
                 ...accounts.map((a) => Padding(

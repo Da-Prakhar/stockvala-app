@@ -229,6 +229,12 @@ class WebSocketService extends ChangeNotifier {
         : DateTime.now().millisecondsSinceEpoch;
     final existing = _pending[sym] ?? _ticks[sym];
     if (existing != null && existing.ts >= ts && !existing.isStale) return;
+    // Feed-consistency: brokers resolve SYMBOL.# per server; a REST quote far
+    // from the stream's price is another feed and would paint phantom wicks.
+    if (existing != null && existing.bid > 0 &&
+        (b - existing.bid).abs() / existing.bid > 0.005) {
+      return;
+    }
     final prev = _ticks[sym];
     final b = bid > 0 ? bid : ask;
     final a = ask > 0 ? ask : bid;

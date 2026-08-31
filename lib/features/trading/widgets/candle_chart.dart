@@ -59,6 +59,10 @@ class _CandleChartState extends State<CandleChart> {
   Timer? _flushTimer;
   StreamSubscription<QuoteTick>? _tickSub;
   bool _dirty = false; // a tick folded since the last chart flush
+  int _lastFoldAt = 0; // ms — staleness escape for the divergence guard
+  int _rev = 0;        // repaint token — the painter compares THIS, not list
+                       // identity: bars mutate in place, so the reference
+                       // never changes and shouldRepaint saw "no change".
 
   String get _cacheKey => '${widget.symbol}|$_mt5Tf';
   String get _mt5Tf => mapTimeframe(widget.timeframe);
@@ -95,7 +99,7 @@ class _CandleChartState extends State<CandleChart> {
     _flushTimer = Timer.periodic(const Duration(milliseconds: 300), (_) {
       if (_dirty && mounted) {
         _dirty = false;
-        setState(() {});
+        setState(() => _rev++);
       }
     });
   }
@@ -125,6 +129,7 @@ class _CandleChartState extends State<CandleChart> {
       if (candles.isNotEmpty) {
         _failStreak = 0;
         setState(() {
+          _rev++;
           _unavailable = false;
           if (first) {
             _bars = candles;
@@ -163,9 +168,13 @@ class _CandleChartState extends State<CandleChart> {
     final price = tick.bid;
 
     // Feeds can disagree (a stale gateway resolving SYMBOL.# on another
-    // server). A quote >3% away from the forming candle is not this chart's
-    // feed — folding it in painted kilometre-long wicks.
-    if ((price - last.close).abs() / last.close > 0.01) return;
+    // server). A quote >1% off the forming candle is not this chart's feed —
+    // unless the chart has been quiet for 2 minutes, in which case the new
+    // quote is reality and the old candle is what's wrong.
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final quiet = _lastFoldAt > 0 && nowMs - _lastFoldAt > 120000;
+    if (!quiet && (price - last.close).abs() / last.close > 0.01) return;
+    _lastFoldAt = nowMs;
 
     final tfSecs = _tfSeconds[_mt5Tf] ?? 900;
     final nowSecs = DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -218,6 +227,7 @@ class _CandleChartState extends State<CandleChart> {
               painter: _CandlePainter(
                 bars: _bars,
                 maxVisible: 80,
+                revision: _rev,
               ),
             ),
           ),
@@ -240,7 +250,8 @@ class _CandleChartState extends State<CandleChart> {
 class _CandlePainter extends CustomPainter {
   final List<CandleData> bars;
   final int maxVisible;
-  _CandlePainter({required this.bars, required this.maxVisible});
+  final int revision;
+  _CandlePainter({required this.bars, required this.maxVisible, required this.revision});
 
   static const _axisW = 62.0;
   static const _timeH = 20.0;
@@ -374,6 +385,5 @@ class _CandlePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_CandlePainter old) =>
-      old.bars != bars || old.bars.length != bars.length;
+  bool shouldRepaint(_CandlePainter old) => old.revision != revision;
 }

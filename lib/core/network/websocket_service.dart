@@ -122,6 +122,8 @@ class WebSocketService extends ChangeNotifier {
      ═══════════════════════════════════════════════════ */
   final Map<String, QuoteTick> _pending = {};
   Timer? _flushTimer;
+  int _lastTickAt = 0;          // ms — last committed tick (any symbol)
+  int _lastForcedReconnect = 0; // ms — watchdog throttle
   bool _dirtySinceSave = false;
   DateTime _lastSave = DateTime.fromMillisecondsSinceEpoch(0);
 
@@ -198,7 +200,21 @@ class WebSocketService extends ChangeNotifier {
 
   void _startFlushLoop() {
     _flushTimer ??= Timer.periodic(const Duration(milliseconds: 100), (_) {
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      // Watchdog: sockets can die without a disconnect event (sleep, network
+      // switch). Connected + subscribed + silent for 20s = dead — rebuild it.
+      if (_connected &&
+          _subscriptions.isNotEmpty &&
+          _lastTickAt > 0 &&
+          nowMs - _lastTickAt > 20000 &&
+          nowMs - _lastForcedReconnect > 30000) {
+        _lastForcedReconnect = nowMs;
+        debugPrint('[WS] watchdog: no ticks for 20s — forcing reconnect');
+        reconnectWithAuth();
+        return;
+      }
       if (_pending.isEmpty) return;
+      _lastTickAt = nowMs;
       final batch = Map<String, QuoteTick>.from(_pending);
       _pending.clear();
       batch.forEach((sym, tick) {
@@ -231,8 +247,10 @@ class WebSocketService extends ChangeNotifier {
     if (existing != null && existing.ts >= ts && !existing.isStale) return;
     // Feed-consistency: brokers resolve SYMBOL.# per server; a REST quote far
     // from the stream's price is another feed and would paint phantom wicks.
+    // A STALE stored price gets no such trust — after 2 quiet minutes the
+    // incoming quote wins, or the app can never converge back to reality.
     final incoming = bid > 0 ? bid : ask;
-    if (existing != null && existing.bid > 0 &&
+    if (existing != null && existing.bid > 0 && !existing.isStale &&
         (incoming - existing.bid).abs() / existing.bid > 0.005) {
       return;
     }

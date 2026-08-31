@@ -31,7 +31,9 @@ class TradingScreen extends StatefulWidget {
 class _TradingScreenState extends State<TradingScreen>
     with AutomaticKeepAliveClientMixin {
   int _topTab = 0; // 0 CFDs · 1 Copy
-  String _selectedPair = 'EURUSD';
+  // Start on whatever symbol was last requested (watchlist taps set this
+  // BEFORE the screen mounts — a fixed default opened EURUSD for every tap).
+  String _selectedPair = TradingScreen.symbolRequest.value;
   String _selectedTf = '15m';
   bool _isBuy = true;
   String _orderType = 'Market';

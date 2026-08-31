@@ -378,7 +378,10 @@ class _HomeScreenState extends State<HomeScreen> with AutomaticKeepAliveClientMi
                         changePct: pct,
                         spark: spark,
                         marketClosed: tick?.isStale ?? false,
-                        onTap: () => widget.onSwitchTab?.call(2),
+                        onTap: () {
+                          TradingScreen.selectSymbol(sym);
+                          widget.onSwitchTab?.call(2);
+                        },
                       );
                     }),
                 ],

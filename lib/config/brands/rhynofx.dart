@@ -17,6 +17,8 @@ const rhynofxBrand = BrandConfig(
   primaryLightColor: Color(0xFFFBBF24),
   primaryLighterColor: Color(0xFFFEF3C7),
   accentColor: Color(0xFFD97706),
+  logoDarkAsset: 'assets/images/logo_dark.png',
+  logoLightAsset: 'assets/images/logo_light.png',
   supportEmail: 'support@rhynofx.com',
   supportUrl: 'https://rhynofx.com',
   companyName: 'RhynoFX Ltd.',

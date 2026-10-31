@@ -4,6 +4,7 @@ import '../../../core/constants/app_routes.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/widgets/vantage.dart';
 import '../cubit/auth_cubit.dart';
+import '../../../shared/widgets/brand_logo.dart';
 
 /// V2 login — clean light layout: big title, Email tab, gray inputs, orange CTA.
 class LoginScreen extends StatefulWidget {
@@ -85,8 +86,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         color: AppColors.textPrimary, size: 24),
                   ]),
                   const SizedBox(height: 26),
-                  Image.asset('assets/images/logo_light.png',
-                      height: 42, alignment: Alignment.centerLeft),
+                  const BrandLogo(height: 46),
                   const SizedBox(height: 26),
                   const Text('Log In',
                       style: TextStyle(fontSize: 34, fontWeight: FontWeight.w800,

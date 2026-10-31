@@ -24,6 +24,10 @@ class BrandConfig {
   final Color primaryLighterColor; // tint background
   final Color accentColor;
   final String logoIconAsset;  // path inside assets/
+  /// Wordmark images. Null → the app renders a styled text wordmark instead,
+  /// so a brand without artwork never borrows another brand's logo.
+  final String? logoDarkAsset;   // for dark backgrounds
+  final String? logoLightAsset;  // for light backgrounds
   final String supportEmail;
   final String supportUrl;
 
@@ -64,6 +68,8 @@ class BrandConfig {
     required this.primaryLighterColor,
     required this.accentColor,
     this.logoIconAsset = 'assets/icons/logo.png',
+    this.logoDarkAsset,
+    this.logoLightAsset,
     required this.supportEmail,
     required this.supportUrl,
     this.showCopyTrading = true,

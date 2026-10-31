@@ -36,6 +36,11 @@ android {
     flavorDimensions += "brand"
 
     productFlavors {
+        create("stockvalademo") {
+            dimension = "brand"
+            applicationId = "com.stockvala.demo"
+            resValue("string", "app_name", "StockVala Demo")
+        }
         create("stockvala") {
             dimension = "brand"
             applicationId = "com.stockvala.app"

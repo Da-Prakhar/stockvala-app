@@ -4,6 +4,7 @@ import 'brands/alphatrade.dart';
 import 'brands/goldfx.dart';
 import 'brands/nexustrade.dart';
 import 'brands/rhynofx.dart';
+import 'brands/stockvalademo.dart';
 
 /// Brand ID injected at build time via:
 ///   flutter run  --dart-define=BRAND=alphatrade
@@ -18,6 +19,7 @@ const _registry = <String, BrandConfig>{
   'goldfx':     goldfxBrand,
   'nexustrade': nexustradeBrand,
   'rhynofx':    rhynofxBrand,
+  'stockvalademo': stockvalaDemoBrand,
 };
 
 /// Single access point for all brand-specific configuration.

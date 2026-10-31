@@ -62,4 +62,3 @@ migrate_working_dir/
 **/ios/Runner/GeneratedPluginRegistrant.*
 
 # Web
-lib/generated_plugin_registrant.dart
